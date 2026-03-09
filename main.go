@@ -28,16 +28,16 @@ type OllamaChatRequest struct {
 	KeepAlive any       `json:"keep_alive,omitempty"`
 }
 
+type OllamaChatResponse struct {
+	Message Message `json:"message"`
+	Error   string  `json:"error,omitempty"`
+}
+
 type OllamaGenerateRequest struct {
 	Model     string `json:"model"`
 	Prompt    string `json:"prompt"`
 	Stream    bool   `json:"stream"`
 	KeepAlive any    `json:"keep_alive,omitempty"`
-}
-
-type OllamaChatResponse struct {
-	Message Message `json:"message"`
-	Error   string  `json:"error,omitempty"`
 }
 
 type OllamaTagsResponse struct {
@@ -79,16 +79,23 @@ type GeminiGenerateResponse struct {
 }
 
 type ModelResult struct {
-	Model   string
-	Content string
-	Err     error
+	Model         string
+	Content       string
+	Err           error
+	Provider      string
+	CallDuration  time.Duration
+	TotalDuration time.Duration
 }
 
 type JudgeResult struct {
-	Model   string
-	Content string
-	Err     error
-	Enabled bool
+	Model           string
+	Content         string
+	Err             error
+	Enabled         bool
+	Provider        string
+	CallDuration    time.Duration
+	ReleaseDuration time.Duration
+	TotalDuration   time.Duration
 }
 
 type CloudModelConfig struct {
@@ -103,8 +110,9 @@ type Config struct {
 	SystemPrompt string
 	JudgePrompt  string
 
-	JudgeEnabled bool
-	JudgeModel   string
+	JudgeEnabled  bool
+	JudgeModel    string
+	JudgeProvider string
 
 	ModelFilter []string
 	ModelSkip   []string
@@ -129,11 +137,12 @@ var appConfig = Config{
 	SystemPrompt: "你现在是我的私人能量管理系统。请严格按照我的原局（庚午、癸未、辛卯、戊戌）与今日干支进行推演，输出：核心引动、能量体感预测、今日策略（宜/忌）。",
 	JudgePrompt:  "你是一个严谨的结果评审助手。请基于多个模型对同一问题的输出结果，进行横向比较，并输出：1）整体结论；2）每个模型的优缺点；3）哪个模型最完整；4）哪个模型最稳定；5）推荐最终采用哪个模型及理由。请使用简洁清晰的中文。",
 
-	JudgeEnabled: true,
-	JudgeModel:   "qwen3.5:9b",
+	JudgeEnabled:  true,
+	JudgeModel:    "gemini-2.5-pro",
+	JudgeProvider: "gemini",
 
 	ModelFilter: []string{"qwen", "llama", "gemma", "glm"},
-	ModelSkip:   []string{"embed", "embedding", "bge", "rerank", "llava", "vision", "vl", "32b", "72b"},
+	ModelSkip:   []string{"embed", "embedding", "bge", "rerank", "reranker", "llava", "vision", "vl", "32b", "72b"},
 	ModelLimit:  10,
 
 	LocalCallTimeout:       360 * time.Second,
@@ -149,7 +158,7 @@ var appConfig = Config{
 
 	CloudModels: []CloudModelConfig{
 		{
-			Enabled:  false,
+			Enabled:  true,
 			Name:     "gemini-3.1-pro",
 			Provider: "gemini",
 			APIKey:   "<YOUR_GEMINI_API_KEY>",
@@ -158,14 +167,19 @@ var appConfig = Config{
 }
 
 func main() {
-	now := time.Now()
+	startedAt := time.Now()
+	now := startedAt
 
 	if appConfig.StartupCleanupEnabled {
+		cleanupStart := time.Now()
 		if err := ensureNoModelsRunning(appConfig.BaseURL, appConfig.LocalPreflightTimeout, appConfig.RunningPollInterval); err != nil {
 			fmt.Println("启动前清理运行中模型失败:", err)
+			fmt.Printf("启动前清理耗时: %s\n", time.Since(cleanupStart).Round(time.Millisecond))
 			if !appConfig.ContinueOnCleanupError {
 				return
 			}
+		} else {
+			fmt.Printf("启动前清理耗时: %s\n", time.Since(cleanupStart).Round(time.Millisecond))
 		}
 	}
 
@@ -194,18 +208,25 @@ func main() {
 
 	judgeResult := JudgeResult{Enabled: appConfig.JudgeEnabled}
 	if appConfig.JudgeEnabled {
+		judgeTotalStart := time.Now()
 		judgeModel := resolveJudgeModel(localModels, appConfig)
 		fmt.Printf("正在调用裁判模型: %s\n", judgeModel)
 
+		judgeCallStart := time.Now()
 		judgeContent, judgeErr := judgeModelResults(appConfig, judgeModel, promptContent, results)
+		judgeCallCost := time.Since(judgeCallStart).Round(time.Millisecond)
+
 		judgeResult = JudgeResult{
-			Model:   judgeModel,
-			Content: judgeContent,
-			Err:     judgeErr,
-			Enabled: true,
+			Model:        judgeModel,
+			Content:      judgeContent,
+			Err:          judgeErr,
+			Enabled:      true,
+			Provider:     appConfig.JudgeProvider,
+			CallDuration: judgeCallCost,
 		}
 
-		if isLocalModel(judgeModel, localModels) {
+		if appConfig.JudgeProvider == "ollama" && isLocalModel(judgeModel, localModels) {
+			releaseStart := time.Now()
 			if releaseErr := unloadAndWaitAllClear(
 				appConfig.BaseURL,
 				judgeModel,
@@ -213,8 +234,15 @@ func main() {
 				appConfig.RunningPollInterval,
 			); releaseErr != nil {
 				fmt.Printf("裁判模型卸载或等待释放失败: %v\n", releaseErr)
+			} else {
+				judgeResult.ReleaseDuration = time.Since(releaseStart).Round(time.Millisecond)
+				fmt.Printf("裁判模型释放耗时: %s\n", judgeResult.ReleaseDuration)
 			}
 		}
+
+		judgeResult.TotalDuration = time.Since(judgeTotalStart).Round(time.Millisecond)
+		fmt.Printf("裁判模型调用耗时: %s\n", judgeResult.CallDuration)
+		fmt.Printf("裁判模型总耗时: %s\n", judgeResult.TotalDuration)
 
 		if judgeErr != nil {
 			fmt.Println("裁判模型调用失败:", judgeErr)
@@ -223,7 +251,7 @@ func main() {
 		}
 	}
 
-	reportDir, err := saveComparisonReports(now, promptContent, results, judgeResult)
+	reportDir, err := saveComparisonReports(now, promptContent, results, judgeResult, time.Since(startedAt))
 	if err != nil {
 		fmt.Println("保存报告失败:", err)
 		return
@@ -252,6 +280,7 @@ func main() {
 		fmt.Println("===================================")
 	}
 
+	fmt.Printf("\n整轮任务总耗时: %s\n", time.Since(startedAt).Round(time.Millisecond))
 	fmt.Println("\n===================================")
 }
 
@@ -273,16 +302,21 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 
 	for _, modelName := range localModels {
 		index++
+		modelTotalStart := time.Now()
 
 		fmt.Printf("[%d/%d] 准备调用本地模型: %s\n", index, total, modelName)
 
+		preflightStart := time.Now()
 		if err := ensureNoModelsRunning(cfg.BaseURL, cfg.LocalPreflightTimeout, cfg.RunningPollInterval); err != nil {
 			err = fmt.Errorf("调用前清理运行中模型失败: %w", err)
 			fmt.Printf("[%d/%d] %v\n", index, total, err)
+			fmt.Printf("[%d/%d] 调用前清理耗时: %s\n", index, total, time.Since(preflightStart).Round(time.Millisecond))
 
 			results = append(results, ModelResult{
-				Model: modelName,
-				Err:   err,
+				Model:         modelName,
+				Err:           err,
+				Provider:      "ollama",
+				TotalDuration: time.Since(modelTotalStart).Round(time.Millisecond),
 			})
 
 			if !cfg.ContinueOnCleanupError {
@@ -290,8 +324,9 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 			}
 			continue
 		}
+		fmt.Printf("[%d/%d] 调用前清理耗时: %s\n", index, total, time.Since(preflightStart).Round(time.Millisecond))
 
-		content, err := chatWithOllamaWithRetry(
+		content, callCost, err := chatWithOllamaWithRetry(
 			cfg.BaseURL,
 			modelName,
 			cfg.SystemPrompt,
@@ -302,11 +337,16 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 			cfg.RunningPollInterval,
 		)
 
-		results = append(results, ModelResult{
-			Model:   modelName,
-			Content: content,
-			Err:     err,
-		})
+		result := ModelResult{
+			Model:         modelName,
+			Content:       content,
+			Err:           err,
+			Provider:      "ollama",
+			CallDuration:  callCost,
+			TotalDuration: time.Since(modelTotalStart).Round(time.Millisecond),
+		}
+
+		fmt.Printf("[%d/%d] 模型 %s 调用耗时: %s\n", index, total, modelName, callCost)
 
 		if err != nil {
 			fmt.Printf("[%d/%d] 模型 %s 调用失败: %v\n", index, total, modelName, err)
@@ -314,6 +354,7 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 			fmt.Printf("[%d/%d] 模型 %s 调用完成\n", index, total, modelName)
 		}
 
+		releaseStart := time.Now()
 		if releaseErr := unloadAndWaitAllClear(
 			cfg.BaseURL,
 			modelName,
@@ -322,9 +363,14 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 		); releaseErr != nil {
 			fmt.Printf("[%d/%d] 模型 %s 卸载或等待释放失败: %v\n", index, total, modelName, releaseErr)
 		} else {
+			fmt.Printf("[%d/%d] 模型 %s 释放耗时: %s\n", index, total, modelName, time.Since(releaseStart).Round(time.Millisecond))
 			fmt.Printf("[%d/%d] 模型 %s 已确认释放\n", index, total, modelName)
 		}
 
+		result.TotalDuration = time.Since(modelTotalStart).Round(time.Millisecond)
+		fmt.Printf("[%d/%d] 模型 %s 总耗时: %s\n", index, total, modelName, result.TotalDuration)
+
+		results = append(results, result)
 		time.Sleep(cfg.LocalSwitchDelay)
 	}
 
@@ -334,14 +380,24 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 		}
 
 		index++
+		modelTotalStart := time.Now()
+
 		fmt.Printf("[%d/%d] 正在调用云端模型: %s\n", index, total, cloud.Name)
 
+		callStart := time.Now()
 		content, err := chatWithCloudModel(cloud, cfg.SystemPrompt, userPrompt, cfg.CloudCallTimeout)
-		results = append(results, ModelResult{
-			Model:   cloud.Name,
-			Content: content,
-			Err:     err,
-		})
+		callCost := time.Since(callStart).Round(time.Millisecond)
+
+		result := ModelResult{
+			Model:         cloud.Name,
+			Content:       content,
+			Err:           err,
+			Provider:      cloud.Provider,
+			CallDuration:  callCost,
+			TotalDuration: time.Since(modelTotalStart).Round(time.Millisecond),
+		}
+
+		fmt.Printf("[%d/%d] 云端模型 %s 调用耗时: %s\n", index, total, cloud.Name, callCost)
 
 		if err != nil {
 			fmt.Printf("[%d/%d] 云端模型 %s 调用失败: %v\n", index, total, cloud.Name, err)
@@ -349,6 +405,10 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 			fmt.Printf("[%d/%d] 云端模型 %s 调用完成\n", index, total, cloud.Name)
 		}
 
+		result.TotalDuration = time.Since(modelTotalStart).Round(time.Millisecond)
+		fmt.Printf("[%d/%d] 云端模型 %s 总耗时: %s\n", index, total, cloud.Name, result.TotalDuration)
+
+		results = append(results, result)
 		time.Sleep(cfg.CloudSwitchDelay)
 	}
 
@@ -361,21 +421,27 @@ func chatWithOllamaWithRetry(
 	callTimeout time.Duration,
 	unloadTimeout time.Duration,
 	pollInterval time.Duration,
-) (string, error) {
+) (string, time.Duration, error) {
 	if maxAttempts < 1 {
 		maxAttempts = 1
 	}
 
 	var lastErr error
+	var totalCallDuration time.Duration
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		attemptStart := time.Now()
 		content, err := chatWithOllama(baseURL, modelName, systemPrompt, userPrompt, callTimeout)
+		attemptCost := time.Since(attemptStart).Round(time.Millisecond)
+		totalCallDuration += attemptCost
+
 		if err == nil {
-			return content, nil
+			fmt.Printf("模型 %s 第 %d/%d 次调用成功，耗时: %s\n", modelName, attempt, maxAttempts, attemptCost)
+			return content, totalCallDuration.Round(time.Millisecond), nil
 		}
 
 		lastErr = err
-		fmt.Printf("模型 %s 第 %d/%d 次调用失败: %v\n", modelName, attempt, maxAttempts, err)
+		fmt.Printf("模型 %s 第 %d/%d 次调用失败，耗时: %s，错误: %v\n", modelName, attempt, maxAttempts, attemptCost, err)
 
 		if attempt < maxAttempts {
 			_ = unloadAndWaitAllClear(baseURL, modelName, unloadTimeout, pollInterval)
@@ -383,7 +449,7 @@ func chatWithOllamaWithRetry(
 		}
 	}
 
-	return "", fmt.Errorf("模型 %s 多次调用仍失败: %w", modelName, lastErr)
+	return "", totalCallDuration.Round(time.Millisecond), fmt.Errorf("模型 %s 多次调用仍失败: %w", modelName, lastErr)
 }
 
 func chatWithOllama(baseURL, modelName, systemPrompt, userPrompt string, timeout time.Duration) (string, error) {
@@ -452,6 +518,9 @@ func chatWithOllama(baseURL, modelName, systemPrompt, userPrompt string, timeout
 func unloadAndWaitAllClear(baseURL, modelName string, timeout time.Duration, pollInterval time.Duration) error {
 	if err := unloadModel(baseURL, modelName); err != nil {
 		return err
+	}
+	if err := unloadModelViaGenerate(baseURL, modelName); err != nil {
+		fmt.Printf("备用卸载(generate)失败(%s): %v\n", modelName, err)
 	}
 	if err := waitUntilModelUnloaded(baseURL, modelName, timeout, pollInterval); err != nil {
 		return err
@@ -758,7 +827,7 @@ func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, tim
 func judgeModelResults(cfg Config, judgeModel, originalPrompt string, results []ModelResult) (string, error) {
 	judgeInput := buildJudgeInput(originalPrompt, results)
 
-	if isCloudModelName(judgeModel, cfg.CloudModels) {
+	if cfg.JudgeProvider == "gemini" {
 		cloud, ok := findCloudModelConfig(judgeModel, cfg.CloudModels)
 		if !ok {
 			return "", fmt.Errorf("未找到裁判云端模型配置: %s", judgeModel)
@@ -780,6 +849,15 @@ func buildJudgeInput(originalPrompt string, results []ModelResult) string {
 	for _, result := range results {
 		writeString(&builder, "【模型】")
 		writeString(&builder, result.Model)
+		writeString(&builder, "\n")
+		writeString(&builder, "【提供方】")
+		writeString(&builder, result.Provider)
+		writeString(&builder, "\n")
+		writeString(&builder, "【调用耗时】")
+		writeString(&builder, result.CallDuration.Round(time.Millisecond).String())
+		writeString(&builder, "\n")
+		writeString(&builder, "【总耗时】")
+		writeString(&builder, result.TotalDuration.Round(time.Millisecond).String())
 		writeString(&builder, "\n")
 
 		if result.Err != nil {
@@ -804,15 +882,17 @@ func resolveJudgeModel(localModels []string, cfg Config) string {
 	if strings.TrimSpace(cfg.JudgeModel) != "" {
 		return cfg.JudgeModel
 	}
+	if cfg.JudgeProvider == "gemini" {
+		for _, cloud := range cfg.CloudModels {
+			if cloud.Enabled && cloud.Provider == "gemini" && strings.TrimSpace(cloud.Name) != "" {
+				return cloud.Name
+			}
+		}
+	}
 	if len(localModels) > 0 {
 		return localModels[0]
 	}
-	for _, cloud := range cfg.CloudModels {
-		if cloud.Enabled && strings.TrimSpace(cloud.Name) != "" {
-			return cloud.Name
-		}
-	}
-	return "qwen2.5:7b"
+	return "gemini-2.5-pro"
 }
 
 func resolveModels(baseURL string, cfg Config) ([]string, error) {
@@ -983,15 +1063,6 @@ func isLocalModel(model string, localModels []string) bool {
 	return false
 }
 
-func isCloudModelName(model string, cloudModels []CloudModelConfig) bool {
-	for _, cloud := range cloudModels {
-		if cloud.Enabled && cloud.Name == model {
-			return true
-		}
-	}
-	return false
-}
-
 func findCloudModelConfig(model string, cloudModels []CloudModelConfig) (CloudModelConfig, bool) {
 	for _, cloud := range cloudModels {
 		if cloud.Enabled && cloud.Name == model {
@@ -1001,7 +1072,13 @@ func findCloudModelConfig(model string, cloudModels []CloudModelConfig) (CloudMo
 	return CloudModelConfig{}, false
 }
 
-func saveComparisonReports(t time.Time, prompt string, results []ModelResult, judgeResult JudgeResult) (string, error) {
+func saveComparisonReports(
+	t time.Time,
+	prompt string,
+	results []ModelResult,
+	judgeResult JudgeResult,
+	totalDuration time.Duration,
+) (string, error) {
 	reportDir := filepath.Join("reports", t.Format("2006-01-02_15-04-05"))
 	if err := os.MkdirAll(reportDir, 0755); err != nil {
 		return "", fmt.Errorf("创建报告目录失败: %w", err)
@@ -1014,16 +1091,22 @@ func saveComparisonReports(t time.Time, prompt string, results []ModelResult, ju
 		var content string
 		if result.Err != nil {
 			content = fmt.Sprintf(
-				"# 模型报告\n\n- 模型：`%s`\n- 生成时间：`%s`\n- 状态：失败\n- 错误：`%v`\n",
+				"# 模型报告\n\n- 模型：`%s`\n- 提供方：`%s`\n- 生成时间：`%s`\n- 调用耗时：`%s`\n- 总耗时：`%s`\n- 状态：失败\n- 错误：`%v`\n",
 				result.Model,
+				result.Provider,
 				t.Format("2006-01-02 15:04:05"),
+				result.CallDuration.Round(time.Millisecond),
+				result.TotalDuration.Round(time.Millisecond),
 				result.Err,
 			)
 		} else {
 			content = fmt.Sprintf(
-				"# 模型报告\n\n- 模型：`%s`\n- 生成时间：`%s`\n- 状态：成功\n\n## 输出内容\n\n```text\n%s\n```\n",
+				"# 模型报告\n\n- 模型：`%s`\n- 提供方：`%s`\n- 生成时间：`%s`\n- 调用耗时：`%s`\n- 总耗时：`%s`\n- 状态：成功\n\n## 输出内容\n\n```text\n%s\n```\n",
 				result.Model,
+				result.Provider,
 				t.Format("2006-01-02 15:04:05"),
+				result.CallDuration.Round(time.Millisecond),
+				result.TotalDuration.Round(time.Millisecond),
 				result.Content,
 			)
 		}
@@ -1033,7 +1116,7 @@ func saveComparisonReports(t time.Time, prompt string, results []ModelResult, ju
 		}
 	}
 
-	summary := buildSummaryReport(t, prompt, results, judgeResult)
+	summary := buildSummaryReport(t, prompt, results, judgeResult, totalDuration)
 	summaryPath := filepath.Join(reportDir, "summary.md")
 	if err := os.WriteFile(summaryPath, []byte(summary), 0644); err != nil {
 		return "", fmt.Errorf("保存汇总报告失败: %w", err)
@@ -1050,16 +1133,27 @@ func saveComparisonReports(t time.Time, prompt string, results []ModelResult, ju
 	return reportDir, nil
 }
 
-func buildSummaryReport(t time.Time, prompt string, results []ModelResult, judgeResult JudgeResult) string {
+func buildSummaryReport(
+	t time.Time,
+	prompt string,
+	results []ModelResult,
+	judgeResult JudgeResult,
+	totalDuration time.Duration,
+) string {
 	var builder strings.Builder
 
 	writeString(&builder, "# 多模型对比汇总报告\n\n")
 	writeString(&builder, fmt.Sprintf("- 生成时间：`%s`\n", t.Format("2006-01-02 15:04:05")))
-	writeString(&builder, fmt.Sprintf("- 请求内容：`%s`\n\n", prompt))
+	writeString(&builder, fmt.Sprintf("- 请求内容：`%s`\n", prompt))
+	writeString(&builder, fmt.Sprintf("- 整轮任务总耗时：`%s`\n\n", totalDuration.Round(time.Millisecond)))
 
 	writeString(&builder, "## 参与对比的模型结果\n\n")
 	for _, result := range results {
 		writeString(&builder, fmt.Sprintf("## 模型：`%s`\n\n", result.Model))
+		writeString(&builder, fmt.Sprintf("- 提供方：`%s`\n", result.Provider))
+		writeString(&builder, fmt.Sprintf("- 调用耗时：`%s`\n", result.CallDuration.Round(time.Millisecond)))
+		writeString(&builder, fmt.Sprintf("- 总耗时：`%s`\n", result.TotalDuration.Round(time.Millisecond)))
+
 		if result.Err != nil {
 			writeString(&builder, "- 状态：失败\n")
 			writeString(&builder, fmt.Sprintf("- 错误：`%v`\n\n", result.Err))
@@ -1079,6 +1173,10 @@ func buildSummaryReport(t time.Time, prompt string, results []ModelResult, judge
 	if judgeResult.Enabled {
 		writeString(&builder, "## 裁判模型总结\n\n")
 		writeString(&builder, fmt.Sprintf("- 裁判模型：`%s`\n", judgeResult.Model))
+		writeString(&builder, fmt.Sprintf("- 提供方：`%s`\n", judgeResult.Provider))
+		writeString(&builder, fmt.Sprintf("- 调用耗时：`%s`\n", judgeResult.CallDuration.Round(time.Millisecond)))
+		writeString(&builder, fmt.Sprintf("- 总耗时：`%s`\n", judgeResult.TotalDuration.Round(time.Millisecond)))
+
 		if judgeResult.Err != nil {
 			writeString(&builder, "- 状态：失败\n")
 			writeString(&builder, fmt.Sprintf("- 错误：`%v`\n\n", judgeResult.Err))
@@ -1102,7 +1200,10 @@ func buildJudgeReport(t time.Time, judgeResult JudgeResult) string {
 
 	writeString(&builder, "# 裁判模型报告\n\n")
 	writeString(&builder, fmt.Sprintf("- 生成时间：`%s`\n", t.Format("2006-01-02 15:04:05")))
-	writeString(&builder, fmt.Sprintf("- 裁判模型：`%s`\n\n", judgeResult.Model))
+	writeString(&builder, fmt.Sprintf("- 裁判模型：`%s`\n", judgeResult.Model))
+	writeString(&builder, fmt.Sprintf("- 提供方：`%s`\n", judgeResult.Provider))
+	writeString(&builder, fmt.Sprintf("- 调用耗时：`%s`\n", judgeResult.CallDuration.Round(time.Millisecond)))
+	writeString(&builder, fmt.Sprintf("- 总耗时：`%s`\n\n", judgeResult.TotalDuration.Round(time.Millisecond)))
 
 	if judgeResult.Err != nil {
 		writeString(&builder, "- 状态：失败\n")
