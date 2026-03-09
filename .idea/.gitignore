@@ -1,0 +1,48 @@
+# IDE
+.idea/
+.vscode/
+
+# Go build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Binary folders
+bin/
+dist/
+build/
+
+# Logs
+*.log
+logs/
+
+# Coverage
+*.cover
+coverage.out
+cover.out
+
+# Go workspace / vendoring (按需保留)
+vendor/
+
+# Environment files
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+
+# Project runtime output
+reports/
