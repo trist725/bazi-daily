@@ -525,13 +525,13 @@ func saveComparisonReports(t time.Time, prompt string, results []ModelResult, ju
 	}
 
 	summary := buildSummaryReport(t, prompt, results, judgeResult)
-	summaryPath := filepath.Join(reportDir, "summary.txt")
+	summaryPath := filepath.Join(reportDir, "summary.md")
 	if err := os.WriteFile(summaryPath, []byte(summary), 0644); err != nil {
 		return "", fmt.Errorf("保存汇总报告失败: %w", err)
 	}
 
 	if judgeResult.Enabled {
-		judgePath := filepath.Join(reportDir, "judge.txt")
+		judgePath := filepath.Join(reportDir, "judge.md")
 		judgeContent := buildJudgeReport(t, judgeResult)
 		if err := os.WriteFile(judgePath, []byte(judgeContent), 0644); err != nil {
 			return "", fmt.Errorf("保存裁判报告失败: %w", err)
@@ -544,32 +544,44 @@ func saveComparisonReports(t time.Time, prompt string, results []ModelResult, ju
 func buildSummaryReport(t time.Time, prompt string, results []ModelResult, judgeResult JudgeResult) string {
 	var builder strings.Builder
 
-	builder.WriteString("多模型对比汇总报告\n")
-	builder.WriteString("====================\n")
-	builder.WriteString(fmt.Sprintf("生成时间：%s\n", t.Format("2006-01-02 15:04:05")))
-	builder.WriteString(fmt.Sprintf("请求内容：%s\n\n", prompt))
+	writeString(&builder, "# 多模型对比汇总报告\n\n")
+	writeString(&builder, fmt.Sprintf("- 生成时间：`%s`\n", t.Format("2006-01-02 15:04:05")))
+	writeString(&builder, fmt.Sprintf("- 请求内容：`%s`\n\n", prompt))
 
+	writeString(&builder, "## 参与对比的模型结果\n\n")
 	for _, result := range results {
-		builder.WriteString(fmt.Sprintf("----- 模型：%s -----\n", result.Model))
+		writeString(&builder, fmt.Sprintf("## 模型：`%s`\n\n", result.Model))
 		if result.Err != nil {
-			builder.WriteString(fmt.Sprintf("状态：失败\n错误：%v\n\n", result.Err))
+			writeString(&builder, "- 状态：失败\n")
+			writeString(&builder, fmt.Sprintf("- 错误：`%v`\n\n", result.Err))
 			continue
 		}
-		builder.WriteString("状态：成功\n")
-		builder.WriteString(result.Content)
-		builder.WriteString("\n\n")
+
+		writeString(&builder, "- 状态：成功\n\n")
+		writeString(&builder, "### 输出内容\n\n")
+		writeString(&builder, "```text\n")
+		writeString(&builder, result.Content)
+		if !strings.HasSuffix(result.Content, "\n") {
+			writeString(&builder, "\n")
+		}
+		writeString(&builder, "```\n\n")
 	}
 
 	if judgeResult.Enabled {
-		builder.WriteString("裁判模型总结\n")
-		builder.WriteString("====================\n")
-		builder.WriteString(fmt.Sprintf("裁判模型：%s\n", judgeResult.Model))
+		writeString(&builder, "## 裁判模型总结\n\n")
+		writeString(&builder, fmt.Sprintf("- 裁判模型：`%s`\n", judgeResult.Model))
 		if judgeResult.Err != nil {
-			builder.WriteString(fmt.Sprintf("状态：失败\n错误：%v\n", judgeResult.Err))
+			writeString(&builder, "- 状态：失败\n")
+			writeString(&builder, fmt.Sprintf("- 错误：`%v`\n\n", judgeResult.Err))
 		} else {
-			builder.WriteString("状态：成功\n")
-			builder.WriteString(judgeResult.Content)
-			builder.WriteString("\n")
+			writeString(&builder, "- 状态：成功\n\n")
+			writeString(&builder, "### 裁判结论\n\n")
+			writeString(&builder, "```text\n")
+			writeString(&builder, judgeResult.Content)
+			if !strings.HasSuffix(judgeResult.Content, "\n") {
+				writeString(&builder, "\n")
+			}
+			writeString(&builder, "```\n")
 		}
 	}
 
@@ -577,21 +589,35 @@ func buildSummaryReport(t time.Time, prompt string, results []ModelResult, judge
 }
 
 func buildJudgeReport(t time.Time, judgeResult JudgeResult) string {
+	var builder strings.Builder
+
+	writeString(&builder, "# 裁判模型报告\n\n")
+	writeString(&builder, fmt.Sprintf("- 生成时间：`%s`\n", t.Format("2006-01-02 15:04:05")))
+	writeString(&builder, fmt.Sprintf("- 裁判模型：`%s`\n\n", judgeResult.Model))
+
 	if judgeResult.Err != nil {
-		return fmt.Sprintf(
-			"裁判模型：%s\n生成时间：%s\n状态：失败\n错误：%v\n",
-			judgeResult.Model,
-			t.Format("2006-01-02 15:04:05"),
-			judgeResult.Err,
-		)
+		writeString(&builder, "- 状态：失败\n")
+		writeString(&builder, fmt.Sprintf("- 错误：`%v`\n", judgeResult.Err))
+		return builder.String()
 	}
 
-	return fmt.Sprintf(
-		"裁判模型：%s\n生成时间：%s\n状态：成功\n\n%s\n",
-		judgeResult.Model,
-		t.Format("2006-01-02 15:04:05"),
-		judgeResult.Content,
-	)
+	writeString(&builder, "- 状态：成功\n\n")
+	writeString(&builder, "## 裁判结论\n\n")
+	writeString(&builder, "```text\n")
+	writeString(&builder, judgeResult.Content)
+	if !strings.HasSuffix(judgeResult.Content, "\n") {
+		writeString(&builder, "\n")
+	}
+	writeString(&builder, "```\n")
+
+	return builder.String()
+}
+
+func writeString(builder *strings.Builder, s string) {
+	_, err := builder.WriteString(s)
+	if err != nil {
+		panic(err) // 在这里 panic，因为 strings.Builder 的 WriteString 几乎不可能失败
+	}
 }
 
 func sanitizeFileName(name string) string {
