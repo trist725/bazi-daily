@@ -21,27 +21,6 @@ This project automatically builds a daily prompt based on the current date, runs
 
 ---
 
-## 目录 / Table of Contents
-
-- [项目简介 / Overview](#项目简介--overview)
-- [核心功能 / Core Features](#核心功能--core-features)
-- [项目结构 / Project Structure](#项目结构--project-structure)
-- [运行环境 / Requirements](#运行环境--requirements)
-- [快速开始 / Quick Start](#快速开始--quick-start)
-- [配置说明 / Configuration](#配置说明--configuration)
-- [本地模型选择策略 / Local Model Selection Strategy](#本地模型选择策略--local-model-selection-strategy)
-- [Gemini 使用说明 / Gemini Usage](#gemini-使用说明--gemini-usage)
-- [执行流程 / Execution Flow](#执行流程--execution-flow)
-- [报告输出 / Reports](#报告输出--reports)
-- [耗时统计 / Timing Metrics](#耗时统计--timing-metrics)
-- [常见问题 / Troubleshooting](#常见问题--troubleshooting)
-- [建议配置 / Recommended Settings](#建议配置--recommended-settings)
-- [开发建议 / Development Notes](#开发建议--development-notes)
-- [后续可扩展方向 / Future Improvements](#后续可扩展方向--future-improvements)
-- [License](#license)
-
----
-
 ## 项目简介 / Overview
 
 ### 中文
