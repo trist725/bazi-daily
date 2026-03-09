@@ -1,136 +1,118 @@
+### 中文
+
+- `main.go`：项目主程序，包含配置、模型调用、清理逻辑、报告输出
+- `reports/`：程序运行后生成的 Markdown 报告目录
+
+查看已安装模型：
+
+List installed models:
+
+- `main.go`: main application entry, including config, model calls, cleanup logic, and report generation
+- `reports/`: output directory containing generated Markdown reports
+
+# Bazi Daily
+
+一个基于 **Go + Ollama + Gemini** 的八字日课多模型对比工具。  
+A **Go + Ollama + Gemini** powered multi-model comparison tool for daily Bazi briefings.
+
+本项目会根据当天日期自动构造日课输入，串行调用多个本地模型生成结果，并支持使用云端 Gemini 或本地模型作为裁判模型，对多模型输出进行总结和对比，最终自动生成 Markdown 报告。
+
+This project automatically builds a daily prompt based on the current date, runs multiple local models sequentially, and supports using Gemini or a local model as a judge model to summarize and compare outputs. Markdown reports are generated automatically at the end.
 
 ---
 
-## Timing Metrics / 耗时统计
+## 目录 / Table of Contents
+
+- [项目简介 / Overview](#项目简介--overview)
+- [核心功能 / Core Features](#核心功能--core-features)
+- [项目结构 / Project Structure](#项目结构--project-structure)
+- [运行环境 / Requirements](#运行环境--requirements)
+- [快速开始 / Quick Start](#快速开始--quick-start)
+- [配置说明 / Configuration](#配置说明--configuration)
+- [本地模型选择策略 / Local Model Selection Strategy](#本地模型选择策略--local-model-selection-strategy)
+- [Gemini 使用说明 / Gemini Usage](#gemini-使用说明--gemini-usage)
+- [执行流程 / Execution Flow](#执行流程--execution-flow)
+- [报告输出 / Reports](#报告输出--reports)
+- [耗时统计 / Timing Metrics](#耗时统计--timing-metrics)
+- [常见问题 / Troubleshooting](#常见问题--troubleshooting)
+- [建议配置 / Recommended Settings](#建议配置--recommended-settings)
+- [开发建议 / Development Notes](#开发建议--development-notes)
+- [后续可扩展方向 / Future Improvements](#后续可扩展方向--future-improvements)
+- [License](#license)
+
+---
+
+## 项目简介 / Overview
 
 ### 中文
 
-程序会输出以下时间信息：
+`Bazi Daily` 是一个面向个人日课生成与多模型对比的命令行工具。
 
-- 启动前清理耗时
-- 每个模型调用耗时
-- 每个模型释放耗时
-- 每个模型总耗时
-- 裁判模型耗时
-- 整轮任务总耗时
+它的主要目标是：
+
+- 根据当前日期生成日课输入
+- 自动发现本地 Ollama 模型
+- 串行调用多个本地模型，降低显存冲突风险
+- 对多个模型输出进行汇总对比
+- 可选接入 Gemini 作为云端裁判模型
+- 生成易读的 Markdown 报告
+
+这个项目适合：
+
+- 想测试不同本地模型输出差异的人
+- 显存有限、不能并发运行多个模型的人
+- 希望保留日报输出和模型对比记录的人
 
 ### English
 
-The program prints timing information including:
+`Bazi Daily` is a command-line tool for generating daily Bazi briefings and comparing results across multiple models.
 
-- Startup cleanup duration
-- Per-model call duration
-- Per-model release duration
-- Per-model total duration
-- Judge model duration
-- Entire task duration
+Its main goals are:
+
+- Build a daily prompt based on the current date
+- Automatically discover local Ollama models
+- Run local models sequentially to reduce GPU memory conflicts
+- Compare and summarize outputs from multiple models
+- Optionally use Gemini as a cloud judge model
+- Generate readable Markdown reports
+
+This project is suitable for:
+
+- People who want to compare outputs from different local models
+- Users with limited GPU memory who cannot run multiple models concurrently
+- Anyone who wants to keep daily records and model comparison reports
 
 ---
 
-## Typical Workflow / 典型工作流程
+## 核心功能 / Core Features
 
 ### 中文
 
-1. 启动程序
-2. 自动清理残留本地模型
-3. 获取本地已安装 Ollama 模型
-4. 根据过滤规则选择可参与对比的模型
-5. 串行调用本地模型
-6. 每个模型完成后释放显存
-7. 可选调用 Gemini 或本地模型作为裁判
-8. 生成 Markdown 报告
+- **日课生成**：根据当前日期生成固定格式输入
+- **本地模型自动发现**：自动从 Ollama 读取本地已安装模型
+- **本地模型筛选**：根据过滤关键字和排除关键字选择参与比较的模型
+- **串行执行**：严格按顺序调用本地模型，避免同时占用显存
+- **自动清理残留模型**：执行前检查并清理仍在运行的本地模型
+- **自动释放模型**：每个本地模型调用结束后尝试卸载并等待释放
+- **失败重试**：本地模型调用失败时自动重试
+- **云端模型支持**：支持 Gemini 云端模型
+- **裁判模型总结**：支持 Gemini 或本地模型作为裁判输出总结
+- **Markdown 报告输出**：自动生成 summary、judge 和单模型报告
+- **耗时统计**：输出调用耗时、释放耗时、总耗时
 
 ### English
 
-1. Start the program
-2. Clean up leftover local models
-3. Load installed Ollama models
-4. Apply model filtering rules
-5. Run local models sequentially
-6. Release resources after each local model
-7. Optionally call Gemini or a local judge model
-8. Generate Markdown reports
+- **Daily prompt generation** based on the current date
+- **Automatic local model discovery** from Ollama
+- **Local model filtering** using include and exclude keywords
+- **Sequential execution** to avoid concurrent GPU memory usage
+- **Automatic cleanup** of leftover running local models
+- **Automatic unload** after each local model call
+- **Retry mechanism** for failed local model calls
+- **Cloud model support** via Gemini
+- **Judge model summary** using Gemini or a local model
+- **Markdown report generation** for summary, judge, and per-model outputs
+- **Timing metrics** for calls, release, and total execution
 
 ---
 
-## Troubleshooting / 常见问题
-
-### 1. 本地模型调用超时
-### 1. Local model request timeout
-
-**中文：**
-- 检查 Ollama 是否启动
-- 检查模型是否已安装
-- 尝试减少模型数量
-- 使用更轻量的模型
-- 检查是否有残留模型未释放
-
-**English:**
-- Check whether Ollama is running
-- Check whether the model is installed
-- Reduce the number of models
-- Use smaller models
-- Check for leftover running models
-
----
-
-### 2. 某个模型一直无法释放
-### 2. A model cannot be unloaded
-
-**中文：**
-- 查看当前运行模型：
-  ```bash
-  curl http://localhost:11434/api/ps
-  ```
-- 确认是否有其他程序也在使用同一个 Ollama 服务
-- 必要时重启 Ollama
-
-**English:**
-- Check current running models:
-  ```bash
-  curl http://localhost:11434/api/ps
-  ```
-- Make sure no other app is using the same Ollama instance
-- Restart Ollama if necessary
-
----
-
-### 3. Gemini 返回 404
-### 3. Gemini returns 404
-
-**中文：**
-- 检查模型名是否正确
-- 确认当前 API 版本支持该模型
-- 优先使用已验证可用的模型名，例如 `gemini-2.5-pro`
-
-**English:**
-- Check whether the model name is correct
-- Verify that the model is available for the current API version
-- Prefer a verified model name such as `gemini-2.5-pro`
-
----
-
-### 4. Gemini 返回 429
-### 4. Gemini returns 429
-
-**中文：**
-- 说明当前 API 配额不足
-- 检查账户计划和 billing
-- 可以先禁用 Gemini，改用本地裁判模型
-
-**English:**
-- This means your current API quota is exceeded
-- Check your plan and billing settings
-- You can temporarily disable Gemini and use a local judge model instead
-
----
-
-## Recommended Git Ignore / 推荐忽略文件
-
-建议在 `.gitignore` 中至少加入：
-
-```
-results/
-```
-
-Recommended `.gitignore` entries:
