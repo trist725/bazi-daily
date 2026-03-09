@@ -9,32 +9,27 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/6tail/lunar-go/calendar"
 )
 
-type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Temperature float64   `json:"temperature,omitempty"`
-	Stream      bool      `json:"stream,omitempty"`
-}
-
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-type ChatResponse struct {
-	Choices []struct {
-		Message Message `json:"message"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
+type OllamaChatRequest struct {
+	Model     string    `json:"model"`
+	Messages  []Message `json:"messages"`
+	Stream    bool      `json:"stream"`
+	KeepAlive any       `json:"keep_alive,omitempty"`
+}
+
+type OllamaChatResponse struct {
+	Message Message `json:"message"`
+	Error   string  `json:"error,omitempty"`
 }
 
 type OllamaTagsResponse struct {
@@ -58,24 +53,40 @@ type JudgeResult struct {
 	Enabled bool
 }
 
-const (
-	defaultBaseURL = "http://localhost:11434"
-	defaultModel   = "qwen3.5:9b"
-	systemPrompt   = "你现在是我的私人能量管理系统。请严格按照我的原局（庚午、癸未、辛卯、戊戌）与今日干支进行推演，输出：核心引动、能量体感预测、今日策略（宜/忌）。"
-	judgePrompt    = "你是一个严谨的结果评审助手。请基于多个本地模型对同一问题的输出结果，进行横向比较，并输出：1）整体结论；2）每个模型的优缺点；3）哪个模型最完整；4）哪个模型最稳定；5）推荐最终采用哪个模型及理由。请使用简洁清晰的中文。"
-)
+type Config struct {
+	BaseURL      string
+	SystemPrompt string
+	JudgePrompt  string
+
+	JudgeEnabled bool
+	JudgeModel   string
+
+	ModelFilter []string
+	ModelSkip   []string
+	ModelLimit  int
+}
+
+var appConfig = Config{
+	BaseURL:      "http://localhost:11434",
+	SystemPrompt: "你现在是我的私人能量管理系统。请严格按照我的原局（庚午、癸未、辛卯、戊戌）与今日干支进行推演，输出：核心引动、能量体感预测、今日策略（宜/忌）。",
+	JudgePrompt:  "你是一个严谨的结果评审助手。请基于多个本地模型对同一问题的输出结果，进行横向比较，并输出：1）整体结论；2）每个模型的优缺点；3）哪个模型最完整；4）哪个模型最稳定；5）推荐最终采用哪个模型及理由。请使用简洁清晰的中文。",
+	JudgeEnabled: true,
+	JudgeModel:   "qwen3.5:9b",
+	ModelFilter:  []string{"qwen", "llama", "gemma", "glm"},
+	ModelSkip:    []string{"embed", "rerank", "llava", "vision", "32b", "72b"},
+	ModelLimit:   10,
+}
 
 func main() {
 	now := time.Now()
-	baseURL := getEnv("LLM_BASE_URL", defaultBaseURL)
 
-	models, err := resolveModels(baseURL)
+	models, err := resolveModels(appConfig.BaseURL, appConfig)
 	if err != nil {
 		fmt.Println("获取模型列表失败:", err)
 		return
 	}
 	if len(models) == 0 {
-		fmt.Println("过滤后没有可用的聊天模型。你可以检查本地模型列表，或调整 LLM_MODEL_FILTER / LLM_MODEL_SKIP / LLM_MODEL_LIMIT。")
+		fmt.Println("过滤后没有可用模型，请检查本地 Ollama 模型或调整代码中的配置。")
 		return
 	}
 
@@ -85,21 +96,23 @@ func main() {
 	}
 
 	promptContent := buildPrompt(now)
-	results := compareModelsSequentially(baseURL, models, systemPrompt, promptContent)
+	results := compareModelsSequentially(appConfig, models, promptContent)
 
-	judgeResult := JudgeResult{
-		Enabled: getEnvBool("LLM_JUDGE_ENABLED", true),
-	}
-	if judgeResult.Enabled {
-		judgeModel := resolveJudgeModel(models)
+	judgeResult := JudgeResult{Enabled: appConfig.JudgeEnabled}
+	if appConfig.JudgeEnabled {
+		judgeModel := resolveJudgeModel(models, appConfig)
 		fmt.Printf("正在调用裁判模型: %s\n", judgeModel)
 
-		judgeContent, judgeErr := judgeModelResults(baseURL, judgeModel, promptContent, results)
+		judgeContent, judgeErr := judgeModelResults(appConfig, judgeModel, promptContent, results)
 		judgeResult = JudgeResult{
 			Model:   judgeModel,
 			Content: judgeContent,
 			Err:     judgeErr,
 			Enabled: true,
+		}
+
+		if releaseErr := unloadModel(appConfig.BaseURL, judgeModel); releaseErr != nil {
+			fmt.Printf("裁判模型卸载失败: %v\n", releaseErr)
 		}
 
 		if judgeErr != nil {
@@ -151,18 +164,24 @@ func buildPrompt(t time.Time) string {
 	return fmt.Sprintf("%s，%s年%s月%s日", currentDate, yearGanzhi, monthGanzhi, dayGanzhi)
 }
 
-func compareModelsSequentially(baseURL string, models []string, systemPrompt, userPrompt string) []ModelResult {
+func compareModelsSequentially(cfg Config, models []string, userPrompt string) []ModelResult {
 	results := make([]ModelResult, 0, len(models))
 
 	for i, modelName := range models {
 		fmt.Printf("[%d/%d] 正在调用模型: %s\n", i+1, len(models), modelName)
 
-		content, err := chatWithLocalModel(baseURL, modelName, systemPrompt, userPrompt)
+		content, err := chatWithOllama(cfg.BaseURL, modelName, cfg.SystemPrompt, userPrompt)
 		results = append(results, ModelResult{
 			Model:   modelName,
 			Content: content,
 			Err:     err,
 		})
+
+		if releaseErr := unloadModel(cfg.BaseURL, modelName); releaseErr != nil {
+			fmt.Printf("[%d/%d] 模型 %s 卸载失败: %v\n", i+1, len(models), modelName, releaseErr)
+		} else {
+			fmt.Printf("[%d/%d] 模型 %s 已请求卸载\n", i+1, len(models), modelName)
+		}
 
 		if err != nil {
 			fmt.Printf("[%d/%d] 模型 %s 调用失败: %v\n", i+1, len(models), modelName, err)
@@ -170,15 +189,16 @@ func compareModelsSequentially(baseURL string, models []string, systemPrompt, us
 		}
 
 		fmt.Printf("[%d/%d] 模型 %s 调用完成\n", i+1, len(models), modelName)
+		time.Sleep(2 * time.Second)
 	}
 
 	return results
 }
 
-func chatWithLocalModel(baseURL, modelName, systemPrompt, userPrompt string) (string, error) {
-	url := strings.TrimRight(baseURL, "/") + "/v1/chat/completions"
+func chatWithOllama(baseURL, modelName, systemPrompt, userPrompt string) (string, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/chat"
 
-	reqBody := ChatRequest{
+	reqBody := OllamaChatRequest{
 		Model: modelName,
 		Messages: []Message{
 			{
@@ -190,8 +210,8 @@ func chatWithLocalModel(baseURL, modelName, systemPrompt, userPrompt string) (st
 				Content: userPrompt,
 			},
 		},
-		Temperature: 0.7,
-		Stream:      false,
+		Stream:    false,
+		KeepAlive: "0s",
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -211,7 +231,7 @@ func chatWithLocalModel(baseURL, modelName, systemPrompt, userPrompt string) (st
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("请求本地模型失败，请检查本地服务是否启动: %w", err)
+		return "", fmt.Errorf("请求本地模型失败，请检查 Ollama 是否启动: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -224,30 +244,69 @@ func chatWithLocalModel(baseURL, modelName, systemPrompt, userPrompt string) (st
 		return "", fmt.Errorf("模型服务返回异常状态 %d: %s", resp.StatusCode, string(body))
 	}
 
-	var chatResp ChatResponse
+	var chatResp OllamaChatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
 		return "", fmt.Errorf("解析响应失败: %w，原始响应: %s", err, string(body))
 	}
 
-	if chatResp.Error != nil {
-		return "", fmt.Errorf("模型服务错误: %s", chatResp.Error.Message)
+	if strings.TrimSpace(chatResp.Error) != "" {
+		return "", fmt.Errorf("模型服务错误: %s", chatResp.Error)
 	}
 
-	if len(chatResp.Choices) == 0 {
-		return "", fmt.Errorf("未获取到模型回复，原始响应: %s", string(body))
-	}
-
-	content := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+	content := strings.TrimSpace(chatResp.Message.Content)
 	if content == "" {
-		return "", fmt.Errorf("模型返回内容为空")
+		return "", fmt.Errorf("模型返回内容为空，原始响应: %s", string(body))
 	}
 
 	return content, nil
 }
 
-func judgeModelResults(baseURL, judgeModel, originalPrompt string, results []ModelResult) (string, error) {
+func unloadModel(baseURL, modelName string) error {
+	url := strings.TrimRight(baseURL, "/") + "/api/chat"
+
+	reqBody := OllamaChatRequest{
+		Model:     modelName,
+		Messages:  []Message{},
+		Stream:    false,
+		KeepAlive: 0,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("卸载请求编码失败: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("创建卸载请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{
+		Timeout: 60 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("发送卸载请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取卸载响应失败: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("卸载失败，状态码 %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+func judgeModelResults(cfg Config, judgeModel, originalPrompt string, results []ModelResult) (string, error) {
 	judgeInput := buildJudgeInput(originalPrompt, results)
-	return chatWithLocalModel(baseURL, judgeModel, judgePrompt, judgeInput)
+	return chatWithOllama(cfg.BaseURL, judgeModel, cfg.JudgePrompt, judgeInput)
 }
 
 func buildJudgeInput(originalPrompt string, results []ModelResult) string {
@@ -281,41 +340,22 @@ func buildJudgeInput(originalPrompt string, results []ModelResult) string {
 	return builder.String()
 }
 
-func resolveJudgeModel(models []string) string {
-	judgeModel := strings.TrimSpace(os.Getenv("LLM_JUDGE_MODEL"))
-	if judgeModel != "" {
-		return judgeModel
+func resolveJudgeModel(models []string, cfg Config) string {
+	if strings.TrimSpace(cfg.JudgeModel) != "" {
+		return cfg.JudgeModel
 	}
 	if len(models) > 0 {
 		return models[0]
 	}
-	return defaultModel
+	return "qwen2.5:7b"
 }
 
-func resolveModels(baseURL string) ([]string, error) {
-	explicitModels := parseCSVEnv("LLM_MODELS")
-	if len(explicitModels) > 0 {
-		return applyModelSelectionRules(explicitModels), nil
-	}
-
+func resolveModels(baseURL string, cfg Config) ([]string, error) {
 	models, err := fetchInstalledModels(baseURL)
 	if err != nil {
-		fallback := strings.TrimSpace(os.Getenv("LLM_MODEL"))
-		if fallback != "" {
-			return applyModelSelectionRules([]string{fallback}), nil
-		}
 		return nil, err
 	}
-
-	if len(models) == 0 {
-		fallback := strings.TrimSpace(os.Getenv("LLM_MODEL"))
-		if fallback != "" {
-			return applyModelSelectionRules([]string{fallback}), nil
-		}
-		return applyModelSelectionRules([]string{defaultModel}), nil
-	}
-
-	return applyModelSelectionRules(models), nil
+	return applyModelSelectionRules(models, cfg), nil
 }
 
 func fetchInstalledModels(baseURL string) ([]string, error) {
@@ -363,21 +403,17 @@ func fetchInstalledModels(baseURL string) ([]string, error) {
 	return models, nil
 }
 
-func applyModelSelectionRules(models []string) []string {
-	unique := uniqueStrings(models)
-	filterKeywords := parseCSVEnv("LLM_MODEL_FILTER")
-	skipKeywords := parseCSVEnv("LLM_MODEL_SKIP")
-	limit := getEnvInt("LLM_MODEL_LIMIT", 0)
+func applyModelSelectionRules(models []string, cfg Config) []string {
+	selected := make([]string, 0, len(models))
 
-	selected := make([]string, 0, len(unique))
-	for _, model := range unique {
+	for _, model := range uniqueStrings(models) {
 		if !isLikelyChatModel(model) {
 			continue
 		}
-		if len(filterKeywords) > 0 && !containsAnyKeyword(model, filterKeywords) {
+		if len(cfg.ModelFilter) > 0 && !containsAnyKeyword(model, cfg.ModelFilter) {
 			continue
 		}
-		if len(skipKeywords) > 0 && containsAnyKeyword(model, skipKeywords) {
+		if len(cfg.ModelSkip) > 0 && containsAnyKeyword(model, cfg.ModelSkip) {
 			continue
 		}
 		selected = append(selected, model)
@@ -385,8 +421,8 @@ func applyModelSelectionRules(models []string) []string {
 
 	sort.Strings(selected)
 
-	if limit > 0 && len(selected) > limit {
-		selected = selected[:limit]
+	if cfg.ModelLimit > 0 && len(selected) > cfg.ModelLimit {
+		selected = selected[:cfg.ModelLimit]
 	}
 
 	return selected
@@ -429,36 +465,18 @@ func isLikelyChatModel(modelName string) bool {
 func containsAnyKeyword(modelName string, keywords []string) bool {
 	name := strings.ToLower(strings.TrimSpace(modelName))
 	for _, keyword := range keywords {
-		if keyword == "" {
-			continue
-		}
-		if strings.Contains(name, strings.ToLower(strings.TrimSpace(keyword))) {
+		k := strings.ToLower(strings.TrimSpace(keyword))
+		if k != "" && strings.Contains(name, k) {
 			return true
 		}
 	}
 	return false
 }
 
-func parseCSVEnv(key string) []string {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return nil
-	}
-
-	parts := strings.Split(raw, ",")
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		value := strings.TrimSpace(part)
-		if value != "" {
-			result = append(result, value)
-		}
-	}
-	return result
-}
-
 func uniqueStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
+
 	for _, value := range values {
 		v := strings.TrimSpace(value)
 		if v == "" {
@@ -470,36 +488,8 @@ func uniqueStrings(values []string) []string {
 		seen[v] = struct{}{}
 		result = append(result, v)
 	}
+
 	return result
-}
-
-func getEnvInt(key string, fallback int) int {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-
-	value, err := strconv.Atoi(raw)
-	if err != nil || value < 0 {
-		return fallback
-	}
-	return value
-}
-
-func getEnvBool(key string, fallback bool) bool {
-	raw := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
-	if raw == "" {
-		return fallback
-	}
-
-	switch raw {
-	case "1", "true", "yes", "y", "on":
-		return true
-	case "0", "false", "no", "n", "off":
-		return false
-	default:
-		return fallback
-	}
 }
 
 func saveComparisonReports(t time.Time, prompt string, results []ModelResult, judgeResult JudgeResult) (string, error) {
@@ -618,12 +608,4 @@ func sanitizeFileName(name string) string {
 		" ", "_",
 	)
 	return replacer.Replace(name)
-}
-
-func getEnv(key, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	return value
 }
