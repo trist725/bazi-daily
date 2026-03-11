@@ -138,7 +138,7 @@ var appConfig = Config{
 	JudgePrompt:  "你是一个严谨的结果评审助手。请基于多个模型对同一问题的输出结果，进行横向比较，并输出：1）整体结论；2）每个模型的优缺点；3）哪个模型最完整；4）哪个模型最稳定；5）推荐最终采用哪个模型及理由。请使用简洁清晰的中文。",
 
 	JudgeEnabled:  true,
-	JudgeModel:    "gemini-3.1-pro-preview",
+	JudgeModel:    "gemini-flash-latest",
 	JudgeProvider: "gemini",
 
 	ModelFilter: []string{"qwen", "llama", "gemma", "glm"},
