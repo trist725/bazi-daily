@@ -102,16 +102,19 @@ type JudgeResult struct {
 }
 
 type CloudModelConfig struct {
-	Enabled  bool
-	Name     string
-	Provider string
-	APIKey   string
+	Enabled    bool
+	Name       string
+	Provider   string
+	APIKey     string
+	APIKeyFile string
 }
 
 type Config struct {
-	BaseURL      string
-	SystemPrompt string
-	JudgePrompt  string
+	BaseURL          string
+	SystemPrompt     string
+	JudgePrompt      string
+	SystemPromptFile string
+	JudgePromptFile  string
 
 	JudgeEnabled  bool
 	JudgeModel    string
@@ -139,9 +142,13 @@ type Config struct {
 }
 
 var appConfig = Config{
-	BaseURL:      "http://localhost:11434",
+	BaseURL: "http://localhost:11434",
+
 	SystemPrompt: "你现在是我的私人能量管理系统。请严格按照我的原局（庚午、癸未、辛卯、戊戌）与今日干支进行推演，输出：核心引动、能量体感预测、今日策略（宜/忌）。",
-	JudgePrompt:  "你是一个严谨的最终结论整合助手。你会收到多个模型针对同一问题的输出结果。请先横向比较，再生成一份可直接采用的最终答案。请严格按以下结构输出：一、今日运势评分（满分10分，格式必须为“X/10”）；二、最终结论；三、模型对比；四、最佳模型；五、采用建议；六、置信度。你不能只做点评，必须明确给出最终采用的整合结论，并且必须给出今日运势评分与简要评分理由。请使用简洁、明确、可落地的中文。",
+	JudgePrompt:  "你是一个严谨的最终结论整合助手。请先横向比较，再生成一份可直接采用的最终答案，并输出今日运势评分。",
+
+	SystemPromptFile: "prompts/system_prompt.txt",
+	JudgePromptFile:  "prompts/judge_prompt.txt",
 
 	JudgeEnabled:  true,
 	JudgeModel:    "gemini-flash-latest",
@@ -167,15 +174,21 @@ var appConfig = Config{
 
 	CloudModels: []CloudModelConfig{
 		{
-			Enabled:  true,
-			Name:     "gemini-flash-latest",
-			Provider: "gemini",
-			APIKey:   "YOUR_GEMINI_API_KEY",
+			Enabled:    true,
+			Name:       "gemini-flash-latest",
+			Provider:   "gemini",
+			APIKey:     "",
+			APIKeyFile: "secrets/gemini_api_key.txt",
 		},
 	},
 }
 
 func main() {
+	if err := loadRuntimeResources(&appConfig); err != nil {
+		fmt.Println("加载配置资源失败:", err)
+		return
+	}
+
 	startedAt := time.Now()
 	now := startedAt
 	promptContent := buildPrompt(now)
@@ -339,6 +352,82 @@ func buildPrompt(t time.Time) string {
 
 	currentDate := t.Format("2006年01月02日")
 	return fmt.Sprintf("%s，%s年%s月%s日", currentDate, yearGanzhi, monthGanzhi, dayGanzhi)
+}
+
+func loadRuntimeResources(cfg *Config) error {
+	systemPrompt, err := loadPromptWithFallback(cfg.SystemPromptFile, cfg.SystemPrompt)
+	if err != nil {
+		return fmt.Errorf("加载 system prompt 失败: %w", err)
+	}
+	judgePrompt, err := loadPromptWithFallback(cfg.JudgePromptFile, cfg.JudgePrompt)
+	if err != nil {
+		return fmt.Errorf("加载 judge prompt 失败: %w", err)
+	}
+	cfg.SystemPrompt = systemPrompt
+	cfg.JudgePrompt = judgePrompt
+
+	for i := range cfg.CloudModels {
+		key, err := loadAPIKeyWithFallback(cfg.CloudModels[i].APIKeyFile, cfg.CloudModels[i].APIKey)
+		if err != nil {
+			return fmt.Errorf("加载云端模型 API Key 失败(%s): %w", cfg.CloudModels[i].Name, err)
+		}
+		cfg.CloudModels[i].APIKey = key
+	}
+
+	return nil
+}
+
+func loadPromptWithFallback(filePath string, fallback string) (string, error) {
+	path := strings.TrimSpace(filePath)
+	if path == "" {
+		if strings.TrimSpace(fallback) == "" {
+			return "", fmt.Errorf("prompt 文件路径为空且默认 prompt 为空")
+		}
+		return strings.TrimSpace(fallback), nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if strings.TrimSpace(fallback) == "" {
+			return "", fmt.Errorf("读取文件失败: %w", err)
+		}
+		fmt.Printf("提示：读取 prompt 文件失败，改用内置默认内容 (%s): %v\n", path, err)
+		return strings.TrimSpace(fallback), nil
+	}
+
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		if strings.TrimSpace(fallback) == "" {
+			return "", fmt.Errorf("prompt 文件内容为空: %s", path)
+		}
+		fmt.Printf("提示：prompt 文件为空，改用内置默认内容 (%s)\n", path)
+		return strings.TrimSpace(fallback), nil
+	}
+
+	fmt.Printf("已加载 Prompt 文件: %s\n", path)
+	return content, nil
+}
+
+func loadAPIKeyWithFallback(filePath string, fallback string) (string, error) {
+	path := strings.TrimSpace(filePath)
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			key := strings.TrimSpace(string(data))
+			if key != "" && !strings.Contains(key, "<") && key != "YOUR_GEMINI_API_KEY" {
+				fmt.Printf("已加载 API Key 文件: %s\n", path)
+				return key, nil
+			}
+		} else {
+			fmt.Printf("提示：读取 API Key 文件失败 (%s): %v\n", path, err)
+		}
+	}
+
+	key := strings.TrimSpace(fallback)
+	if key == "" || strings.Contains(key, "<") || key == "YOUR_GEMINI_API_KEY" {
+		return "", fmt.Errorf("未读取到有效 API Key")
+	}
+	return key, nil
 }
 
 func runCloudModelsFirst(
@@ -590,14 +679,8 @@ func chatWithOllama(baseURL, modelName, systemPrompt, userPrompt string, timeout
 	reqBody := OllamaChatRequest{
 		Model: modelName,
 		Messages: []Message{
-			{
-				Role:    "system",
-				Content: systemPrompt,
-			},
-			{
-				Role:    "user",
-				Content: userPrompt,
-			},
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
 		},
 		Stream: false,
 	}
@@ -614,7 +697,6 @@ func chatWithOllama(baseURL, modelName, systemPrompt, userPrompt string, timeout
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: timeout}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("请求本地模型失败，请检查 Ollama 是否启动: %w", err)
@@ -665,7 +747,6 @@ func unloadAndWaitAllClear(baseURL, modelName string, timeout time.Duration, pol
 
 func ensureNoModelsRunning(baseURL string, timeout time.Duration, pollInterval time.Duration) error {
 	const maxCleanupRounds = 3
-
 	var lastModels []string
 
 	for round := 1; round <= maxCleanupRounds; round++ {
@@ -721,7 +802,6 @@ func unloadModel(baseURL, modelName string) error {
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 60 * time.Second}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("发送卸载请求失败: %w", err)
@@ -736,7 +816,6 @@ func unloadModel(baseURL, modelName string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("卸载失败，状态码 %d: %s", resp.StatusCode, string(body))
 	}
-
 	return nil
 }
 
@@ -762,7 +841,6 @@ func unloadModelViaGenerate(baseURL, modelName string) error {
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 60 * time.Second}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("发送 generate 卸载请求失败: %w", err)
@@ -777,7 +855,6 @@ func unloadModelViaGenerate(baseURL, modelName string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("generate 卸载失败，状态码 %d: %s", resp.StatusCode, string(body))
 	}
-
 	return nil
 }
 
@@ -832,7 +909,6 @@ func isModelRunning(baseURL, modelName string) (bool, error) {
 			return true, nil
 		}
 	}
-
 	return false, nil
 }
 
@@ -840,7 +916,6 @@ func getRunningModels(baseURL string) ([]string, error) {
 	url := strings.TrimRight(baseURL, "/") + "/api/ps"
 
 	client := &http.Client{Timeout: 30 * time.Second}
-
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("查询运行中模型失败: %w", err)
@@ -885,7 +960,7 @@ func chatWithCloudModel(cloud CloudModelConfig, systemPrompt, userPrompt string,
 func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, timeout time.Duration) (string, error) {
 	apiKey := strings.TrimSpace(cloud.APIKey)
 	if apiKey == "" || strings.Contains(apiKey, "<") || apiKey == "YOUR_GEMINI_API_KEY" {
-		return "", fmt.Errorf("Gemini API Key 未配置，请替换为真实 key")
+		return "", fmt.Errorf("Gemini API Key 未配置，请检查 API Key 文件")
 	}
 
 	url := fmt.Sprintf(
@@ -899,9 +974,7 @@ func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, tim
 			{
 				Role: "user",
 				Parts: []GeminiPart{
-					{
-						Text: systemPrompt + "\n\n" + userPrompt,
-					},
+					{Text: systemPrompt + "\n\n" + userPrompt},
 				},
 			},
 		},
@@ -919,7 +992,6 @@ func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, tim
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: timeout}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("Gemini 请求失败: %w", err)
@@ -952,7 +1024,6 @@ func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, tim
 	if content == "" {
 		return "", fmt.Errorf("Gemini 返回内容为空")
 	}
-
 	return content, nil
 }
 
@@ -1497,131 +1568,35 @@ func saveFinalConclusionHTML(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>最终结论</title>
 <style>
-body{
-	font-family:"Microsoft YaHei","PingFang SC",Arial,sans-serif;
-	background:#f5f7fb;
-	color:#1f2937;
-	margin:0;
-	padding:24px;
-}
-.container{
-	max-width:980px;
-	margin:0 auto;
-}
-.card{
-	background:#fff;
-	border-radius:16px;
-	padding:24px;
-	box-shadow:0 8px 30px rgba(0,0,0,.08);
-	margin-bottom:20px;
-}
-h1{
-	margin:0 0 16px 0;
-	font-size:32px;
-}
-h2{
-	margin:0 0 14px 0;
-	font-size:22px;
-	color:#111827;
-}
-.meta{
-	line-height:1.9;
-	font-size:15px;
-	color:#4b5563;
-}
-.highlight{
-	background:linear-gradient(135deg,#fff7ed,#fffbeb);
-	border:1px solid #fdba74;
-}
-.summary-card{
-	background:linear-gradient(135deg,#faf5ff,#eef2ff);
-	border:1px solid #c4b5fd;
-}
-.summary-text{
-	white-space:pre-wrap;
-	word-break:break-word;
-	line-height:1.9;
-	font-size:16px;
-	color:#312e81;
-	font-weight:600;
-}
-.score-card{
-	text-align:center;
-}
-.score-good{
-	background:linear-gradient(135deg,#ecfdf5,#dcfce7);
-	border:1px solid #86efac;
-}
+body{font-family:"Microsoft YaHei","PingFang SC",Arial,sans-serif;background:#f5f7fb;color:#1f2937;margin:0;padding:24px;}
+.container{max-width:980px;margin:0 auto;}
+.card{background:#fff;border-radius:16px;padding:24px;box-shadow:0 8px 30px rgba(0,0,0,.08);margin-bottom:20px;}
+h1{margin:0 0 16px 0;font-size:32px;}
+h2{margin:0 0 14px 0;font-size:22px;color:#111827;}
+.meta{line-height:1.9;font-size:15px;color:#4b5563;}
+.highlight{background:linear-gradient(135deg,#fff7ed,#fffbeb);border:1px solid #fdba74;}
+.summary-card{background:linear-gradient(135deg,#faf5ff,#eef2ff);border:1px solid #c4b5fd;}
+.summary-text{white-space:pre-wrap;word-break:break-word;line-height:1.9;font-size:16px;color:#312e81;font-weight:600;}
+.score-card{text-align:center;}
+.score-good{background:linear-gradient(135deg,#ecfdf5,#dcfce7);border:1px solid #86efac;}
 .score-good .score-label{color:#15803d;}
 .score-good .score-value{color:#166534;}
-
-.score-mid{
-	background:linear-gradient(135deg,#fffbeb,#fef3c7);
-	border:1px solid #fcd34d;
-}
+.score-mid{background:linear-gradient(135deg,#fffbeb,#fef3c7);border:1px solid #fcd34d;}
 .score-mid .score-label{color:#b45309;}
 .score-mid .score-value{color:#92400e;}
-
-.score-low{
-	background:linear-gradient(135deg,#fef2f2,#fee2e2);
-	border:1px solid #fca5a5;
-}
+.score-low{background:linear-gradient(135deg,#fef2f2,#fee2e2);border:1px solid #fca5a5;}
 .score-low .score-label{color:#b91c1c;}
 .score-low .score-value{color:#991b1b;}
-
-.score-unknown{
-	background:linear-gradient(135deg,#eff6ff,#e0e7ff);
-	border:1px solid #93c5fd;
-}
+.score-unknown{background:linear-gradient(135deg,#eff6ff,#e0e7ff);border:1px solid #93c5fd;}
 .score-unknown .score-label{color:#1d4ed8;}
 .score-unknown .score-value{color:#1e3a8a;}
-
-.score-label{
-	font-size:16px;
-	margin-bottom:10px;
-	font-weight:700;
-}
-.score-value{
-	font-size:48px;
-	line-height:1.2;
-	font-weight:800;
-	margin-bottom:10px;
-}
-.score-reason{
-	font-size:14px;
-	line-height:1.8;
-	color:#475569;
-}
-pre{
-	white-space:pre-wrap;
-	word-break:break-word;
-	background:#0f172a;
-	color:#e5e7eb;
-	padding:18px;
-	border-radius:12px;
-	line-height:1.75;
-	font-size:15px;
-	overflow:auto;
-}
-ul{
-	margin:0;
-	padding-left:22px;
-	line-height:1.9;
-}
-.note{
-	color:#6b7280;
-	font-size:14px;
-	line-height:1.8;
-}
-.badge{
-	display:inline-block;
-	padding:6px 12px;
-	border-radius:999px;
-	background:#dbeafe;
-	color:#1d4ed8;
-	font-size:13px;
-	margin-bottom:12px;
-}
+.score-label{font-size:16px;margin-bottom:10px;font-weight:700;}
+.score-value{font-size:48px;line-height:1.2;font-weight:800;margin-bottom:10px;}
+.score-reason{font-size:14px;line-height:1.8;color:#475569;}
+pre{white-space:pre-wrap;word-break:break-word;background:#0f172a;color:#e5e7eb;padding:18px;border-radius:12px;line-height:1.75;font-size:15px;overflow:auto;}
+ul{margin:0;padding-left:22px;line-height:1.9;}
+.note{color:#6b7280;font-size:14px;line-height:1.8;}
+.badge{display:inline-block;padding:6px 12px;border-radius:999px;background:#dbeafe;color:#1d4ed8;font-size:13px;margin-bottom:12px;}
 </style>
 </head>
 <body>
@@ -1672,7 +1647,6 @@ ul{
 	if err := os.WriteFile(path, []byte(html), 0644); err != nil {
 		return "", err
 	}
-
 	return path, nil
 }
 
@@ -1744,7 +1718,6 @@ func extractFortuneScore(judgeResult JudgeResult) (string, string) {
 	if reason == "" {
 		reason = "已生成最终结论，但未识别到明确的评分理由。"
 	}
-
 	return score, reason
 }
 
@@ -1812,11 +1785,11 @@ func extractFinalConclusionSummary(content string) string {
 	}
 
 	fallback := buildFinalContentWithoutScore(content)
-	if len([]rune(fallback)) > 180 {
-		runes := []rune(fallback)
-		return strings.TrimSpace(string(runes[:180])) + "..."
+	runes := []rune(strings.TrimSpace(fallback))
+	if len(runes) > 180 {
+		return string(runes[:180]) + "..."
 	}
-	return strings.TrimSpace(fallback)
+	return string(runes)
 }
 
 func isAnyMainSectionHeading(line string) bool {
@@ -1831,10 +1804,8 @@ func isAnyMainSectionHeading(line string) bool {
 func isSectionHeading(line string, num int) bool {
 	line = strings.TrimSpace(line)
 	cnNums := []string{"一", "二", "三", "四", "五", "六", "七", "八", "九", "十"}
-	if num >= 1 && num <= len(cnNums) {
-		if strings.HasPrefix(line, cnNums[num-1]+"、") {
-			return true
-		}
+	if num >= 1 && num <= len(cnNums) && strings.HasPrefix(line, cnNums[num-1]+"、") {
+		return true
 	}
 	if strings.HasPrefix(line, fmt.Sprintf("%d.", num)) {
 		return true
@@ -1879,9 +1850,7 @@ func parseFortuneScore(scoreText string) (float64, bool) {
 		"1、", "",
 		"=", "",
 	)
-	s = replacer.Replace(s)
-	s = strings.TrimSpace(s)
-
+	s = strings.TrimSpace(replacer.Replace(s))
 	if s == "" {
 		return 0, false
 	}

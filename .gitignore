@@ -46,3 +46,7 @@ temp/
 
 # Project runtime output
 reports/
+
+prompts/
+secrets/
+bin/
