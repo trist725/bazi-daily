@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -138,7 +140,7 @@ type Config struct {
 var appConfig = Config{
 	BaseURL:      "http://localhost:11434",
 	SystemPrompt: "你现在是我的私人能量管理系统。请严格按照我的原局（庚午、癸未、辛卯、戊戌）与今日干支进行推演，输出：核心引动、能量体感预测、今日策略（宜/忌）。",
-	JudgePrompt:  "你是一个严谨的最终结论整合助手。你会收到多个模型针对同一问题的输出结果。请先横向比较，再生成一份可直接采用的最终答案。请严格按以下结构输出：1）最终结论：直接给出整合后的最终答案，禁止只做评价不下结论；2）模型对比：分别说明每个模型的优点与不足；3）最佳模型：指出哪个模型最完整、哪个模型最稳定；4）采用建议：说明最终主要参考了哪些模型、为什么；5）置信度：给出你对最终结论的整体置信度（高/中/低）及原因。请使用简洁、明确、可落地的中文。",
+	JudgePrompt:  "你是一个严谨的最终结论整合助手。你会收到多个模型针对同一问题的输出结果。请先横向比较，再生成一份可直接采用的最终答案。请严格按以下结构输出：一、最终结论；二、模型对比；三、最佳模型；四、采用建议；五、置信度。你不能只做点评，必须明确给出最终采用的整合结论。请使用简洁、明确、可落地的中文。",
 
 	JudgeEnabled:  true,
 	JudgeModel:    "gemini-flash-latest",
@@ -167,7 +169,7 @@ var appConfig = Config{
 			Enabled:  true,
 			Name:     "gemini-flash-latest",
 			Provider: "gemini",
-			APIKey:   "AIzaSyCLTRsQIA1nh_oFZgQBfaRzNn6BSfm6dxU",
+			APIKey:   "YOUR_GEMINI_API_KEY",
 		},
 	},
 }
@@ -286,6 +288,18 @@ func main() {
 	if err := saveSummaryReport(reportDir, now, promptContent, results, judgeResult, time.Since(startedAt)); err != nil {
 		fmt.Println("保存汇总报告失败:", err)
 		return
+	}
+
+	finalPath, err := saveFinalConclusionReport(reportDir, now, promptContent, results, judgeResult, time.Since(startedAt))
+	if err != nil {
+		fmt.Println("保存最终结论文件失败:", err)
+	} else {
+		fmt.Println("最终结论文件已生成:", finalPath)
+		if err := openInDefaultBrowser(finalPath); err != nil {
+			fmt.Println("自动打开最终结论文件失败:", err)
+		} else {
+			fmt.Println("已使用默认浏览器打开最终结论文件")
+		}
 	}
 
 	fmt.Println("报告已保存到:", reportDir)
@@ -1307,9 +1321,20 @@ func buildSummaryReport(
 	var builder strings.Builder
 
 	writeString(&builder, "# 多模型对比汇总报告\n\n")
+	writeString(&builder, "## 基本信息\n\n")
 	writeString(&builder, fmt.Sprintf("- 生成时间：`%s`\n", t.Format("2006-01-02 15:04:05")))
 	writeString(&builder, fmt.Sprintf("- 请求内容：`%s`\n", prompt))
 	writeString(&builder, fmt.Sprintf("- 整轮任务总耗时：`%s`\n\n", totalDuration.Round(time.Millisecond)))
+
+	if judgeResult.Enabled && judgeResult.Err == nil && strings.TrimSpace(judgeResult.Content) != "" {
+		writeString(&builder, "## 最终结论（裁判整合）\n\n")
+		writeString(&builder, "```text\n")
+		writeString(&builder, judgeResult.Content)
+		if !strings.HasSuffix(judgeResult.Content, "\n") {
+			writeString(&builder, "\n")
+		}
+		writeString(&builder, "```\n\n")
+	}
 
 	writeString(&builder, "## 参与对比的模型结果\n\n")
 	if len(results) == 0 {
@@ -1369,6 +1394,7 @@ func buildJudgeReport(t time.Time, judgeResult JudgeResult) string {
 	var builder strings.Builder
 
 	writeString(&builder, "# 裁判模型报告\n\n")
+	writeString(&builder, "## 基本信息\n\n")
 	writeString(&builder, fmt.Sprintf("- 生成时间：`%s`\n", t.Format("2006-01-02 15:04:05")))
 	writeString(&builder, fmt.Sprintf("- 裁判模型：`%s`\n", judgeResult.Model))
 	writeString(&builder, fmt.Sprintf("- 提供方：`%s`\n", judgeResult.Provider))
@@ -1376,11 +1402,13 @@ func buildJudgeReport(t time.Time, judgeResult JudgeResult) string {
 	writeString(&builder, fmt.Sprintf("- 总耗时：`%s`\n\n", judgeResult.TotalDuration.Round(time.Millisecond)))
 
 	if judgeResult.Err != nil {
+		writeString(&builder, "## 状态\n\n")
 		writeString(&builder, "- 状态：失败\n")
 		writeString(&builder, fmt.Sprintf("- 错误：`%v`\n", judgeResult.Err))
 		return builder.String()
 	}
 
+	writeString(&builder, "## 状态\n\n")
 	writeString(&builder, "- 状态：成功\n\n")
 	writeString(&builder, "## 裁判结论\n\n")
 	writeString(&builder, "```text\n")
@@ -1391,6 +1419,100 @@ func buildJudgeReport(t time.Time, judgeResult JudgeResult) string {
 	writeString(&builder, "```\n")
 
 	return builder.String()
+}
+
+func saveFinalConclusionReport(
+	reportDir string,
+	t time.Time,
+	prompt string,
+	results []ModelResult,
+	judgeResult JudgeResult,
+	totalDuration time.Duration,
+) (string, error) {
+	path := filepath.Join(reportDir, "final.md")
+
+	var builder strings.Builder
+	writeString(&builder, "# 最终结论\n\n")
+	writeString(&builder, "## 基本信息\n\n")
+	writeString(&builder, fmt.Sprintf("- 生成时间：`%s`\n", t.Format("2006-01-02 15:04:05")))
+	writeString(&builder, fmt.Sprintf("- 问题：`%s`\n", prompt))
+	writeString(&builder, fmt.Sprintf("- 总耗时：`%s`\n\n", totalDuration.Round(time.Millisecond)))
+
+	successModels := make([]string, 0)
+	for _, result := range results {
+		if result.Err == nil && strings.TrimSpace(result.Content) != "" {
+			successModels = append(successModels, result.Model)
+		}
+	}
+
+	writeString(&builder, "## 成功返回的模型\n\n")
+	if len(successModels) == 0 {
+		writeString(&builder, "- 无\n\n")
+	} else {
+		for _, model := range successModels {
+			writeString(&builder, fmt.Sprintf("- `%s`\n", model))
+		}
+		writeString(&builder, "\n")
+	}
+
+	if judgeResult.Enabled && judgeResult.Err == nil && strings.TrimSpace(judgeResult.Content) != "" {
+		writeString(&builder, "## 最终采用结论\n\n")
+		writeString(&builder, "> 以下内容为裁判模型整合后的最终结论，可直接优先查看。\n\n")
+		writeString(&builder, "```text\n")
+		writeString(&builder, judgeResult.Content)
+		if !strings.HasSuffix(judgeResult.Content, "\n") {
+			writeString(&builder, "\n")
+		}
+		writeString(&builder, "```\n\n")
+		writeString(&builder, "## 说明\n\n")
+		writeString(&builder, "- 如需查看每个模型的原始输出，请打开同目录下的各模型报告文件。\n")
+		writeString(&builder, "- 如需查看完整横向比较，请打开 `summary.md` 与 `judge.md`。\n")
+	} else {
+		writeString(&builder, "## 最终采用结论\n\n")
+		writeString(&builder, "> 裁判模型未成功生成最终结论，请查看 `summary.md` 获取完整结果。\n\n")
+
+		firstSuccess := firstSuccessfulResult(results)
+		if firstSuccess != nil {
+			writeString(&builder, fmt.Sprintf("### 参考输出（来自 `%s`）\n\n", firstSuccess.Model))
+			writeString(&builder, "```text\n")
+			writeString(&builder, firstSuccess.Content)
+			if !strings.HasSuffix(firstSuccess.Content, "\n") {
+				writeString(&builder, "\n")
+			}
+			writeString(&builder, "```\n")
+		}
+	}
+
+	if err := os.WriteFile(path, []byte(builder.String()), 0644); err != nil {
+		return "", err
+	}
+
+	return path, nil
+}
+
+func firstSuccessfulResult(results []ModelResult) *ModelResult {
+	for i := range results {
+		if results[i].Err == nil && strings.TrimSpace(results[i].Content) != "" {
+			return &results[i]
+		}
+	}
+	return nil
+}
+
+func openInDefaultBrowser(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+
+	switch runtime.GOOS {
+	case "windows":
+		return exec.Command("cmd", "/c", "start", "", absPath).Start()
+	case "darwin":
+		return exec.Command("open", absPath).Start()
+	default:
+		return exec.Command("xdg-open", absPath).Start()
+	}
 }
 
 func sanitizeFileName(name string) string {
