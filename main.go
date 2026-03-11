@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -140,7 +141,7 @@ type Config struct {
 var appConfig = Config{
 	BaseURL:      "http://localhost:11434",
 	SystemPrompt: "你现在是我的私人能量管理系统。请严格按照我的原局（庚午、癸未、辛卯、戊戌）与今日干支进行推演，输出：核心引动、能量体感预测、今日策略（宜/忌）。",
-	JudgePrompt:  "你是一个严谨的最终结论整合助手。你会收到多个模型针对同一问题的输出结果。请先横向比较，再生成一份可直接采用的最终答案。请严格按以下结构输出：一、最终结论；二、模型对比；三、最佳模型；四、采用建议；五、置信度。你不能只做点评，必须明确给出最终采用的整合结论。请使用简洁、明确、可落地的中文。",
+	JudgePrompt:  "你是一个严谨的最终结论整合助手。你会收到多个模型针对同一问题的输出结果。请先横向比较，再生成一份可直接采用的最终答案。请严格按以下结构输出：一、今日运势评分（满分10分，格式必须为“X/10”）；二、最终结论；三、模型对比；四、最佳模型；五、采用建议；六、置信度。你不能只做点评，必须明确给出最终采用的整合结论，并且必须给出今日运势评分与简要评分理由。请使用简洁、明确、可落地的中文。",
 
 	JudgeEnabled:  true,
 	JudgeModel:    "gemini-flash-latest",
@@ -290,7 +291,7 @@ func main() {
 		return
 	}
 
-	finalPath, err := saveFinalConclusionReport(reportDir, now, promptContent, results, judgeResult, time.Since(startedAt))
+	finalPath, err := saveFinalConclusionHTML(reportDir, now, promptContent, results, judgeResult, time.Since(startedAt))
 	if err != nil {
 		fmt.Println("保存最终结论文件失败:", err)
 	} else {
@@ -984,7 +985,9 @@ func buildJudgeInput(originalPrompt string, results []ModelResult) string {
 
 	writeString(&builder, "以下是同一个问题的多模型输出结果，请你先完成横向评审，再给出一份可以直接采用的最终结论。\n\n")
 	writeString(&builder, "【任务要求】\n")
-	writeString(&builder, "你不能只做模型优劣点评，必须在评审后输出“最终结论”。最终结论必须是整合后的可直接使用版本，而不是简单说哪个模型更好。\n\n")
+	writeString(&builder, "你不能只做模型优劣点评，必须在评审后输出“最终结论”。最终结论必须是整合后的可直接使用版本，而不是简单说哪个模型更好。\n")
+	writeString(&builder, "你必须给出“今日运势评分”，满分 10 分，格式必须严格写成：X/10，例如 7.5/10 或 8/10。\n")
+	writeString(&builder, "你还必须说明该评分的简短理由。\n\n")
 	writeString(&builder, "【原始问题】\n")
 	writeString(&builder, originalPrompt)
 	writeString(&builder, "\n\n")
@@ -1032,11 +1035,12 @@ func buildJudgeInput(originalPrompt string, results []ModelResult) string {
 	}
 
 	writeString(&builder, "请严格按以下标题输出，不要遗漏：\n")
-	writeString(&builder, "一、最终结论\n")
-	writeString(&builder, "二、模型对比\n")
-	writeString(&builder, "三、最佳模型\n")
-	writeString(&builder, "四、采用建议\n")
-	writeString(&builder, "五、置信度\n")
+	writeString(&builder, "一、今日运势评分\n")
+	writeString(&builder, "二、最终结论\n")
+	writeString(&builder, "三、模型对比\n")
+	writeString(&builder, "四、最佳模型\n")
+	writeString(&builder, "五、采用建议\n")
+	writeString(&builder, "六、置信度\n")
 
 	return builder.String()
 }
@@ -1421,7 +1425,7 @@ func buildJudgeReport(t time.Time, judgeResult JudgeResult) string {
 	return builder.String()
 }
 
-func saveFinalConclusionReport(
+func saveFinalConclusionHTML(
 	reportDir string,
 	t time.Time,
 	prompt string,
@@ -1429,14 +1433,7 @@ func saveFinalConclusionReport(
 	judgeResult JudgeResult,
 	totalDuration time.Duration,
 ) (string, error) {
-	path := filepath.Join(reportDir, "final.md")
-
-	var builder strings.Builder
-	writeString(&builder, "# 最终结论\n\n")
-	writeString(&builder, "## 基本信息\n\n")
-	writeString(&builder, fmt.Sprintf("- 生成时间：`%s`\n", t.Format("2006-01-02 15:04:05")))
-	writeString(&builder, fmt.Sprintf("- 问题：`%s`\n", prompt))
-	writeString(&builder, fmt.Sprintf("- 总耗时：`%s`\n\n", totalDuration.Round(time.Millisecond)))
+	path := filepath.Join(reportDir, "final.html")
 
 	successModels := make([]string, 0)
 	for _, result := range results {
@@ -1445,45 +1442,234 @@ func saveFinalConclusionReport(
 		}
 	}
 
-	writeString(&builder, "## 成功返回的模型\n\n")
-	if len(successModels) == 0 {
-		writeString(&builder, "- 无\n\n")
-	} else {
-		for _, model := range successModels {
-			writeString(&builder, fmt.Sprintf("- `%s`\n", model))
-		}
-		writeString(&builder, "\n")
-	}
-
+	rawFinalContent := ""
 	if judgeResult.Enabled && judgeResult.Err == nil && strings.TrimSpace(judgeResult.Content) != "" {
-		writeString(&builder, "## 最终采用结论\n\n")
-		writeString(&builder, "> 以下内容为裁判模型整合后的最终结论，可直接优先查看。\n\n")
-		writeString(&builder, "```text\n")
-		writeString(&builder, judgeResult.Content)
-		if !strings.HasSuffix(judgeResult.Content, "\n") {
-			writeString(&builder, "\n")
-		}
-		writeString(&builder, "```\n\n")
-		writeString(&builder, "## 说明\n\n")
-		writeString(&builder, "- 如需查看每个模型的原始输出，请打开同目录下的各模型报告文件。\n")
-		writeString(&builder, "- 如需查看完整横向比较，请打开 `summary.md` 与 `judge.md`。\n")
+		rawFinalContent = judgeResult.Content
 	} else {
-		writeString(&builder, "## 最终采用结论\n\n")
-		writeString(&builder, "> 裁判模型未成功生成最终结论，请查看 `summary.md` 获取完整结果。\n\n")
-
 		firstSuccess := firstSuccessfulResult(results)
 		if firstSuccess != nil {
-			writeString(&builder, fmt.Sprintf("### 参考输出（来自 `%s`）\n\n", firstSuccess.Model))
-			writeString(&builder, "```text\n")
-			writeString(&builder, firstSuccess.Content)
-			if !strings.HasSuffix(firstSuccess.Content, "\n") {
-				writeString(&builder, "\n")
-			}
-			writeString(&builder, "```\n")
+			rawFinalContent = "裁判模型未成功生成最终结论，以下为首个成功模型的参考输出：\n\n" + firstSuccess.Content
+		} else {
+			rawFinalContent = "本次未生成可用的最终结论，请查看 summary.md 获取详细信息。"
 		}
 	}
 
-	if err := os.WriteFile(path, []byte(builder.String()), 0644); err != nil {
+	scoreText, scoreReason := extractFortuneScore(judgeResult)
+	scoreClass := fortuneScoreClass(scoreText)
+	summaryText := extractFinalConclusionSummary(rawFinalContent)
+	finalContent := buildFinalContentWithoutScore(rawFinalContent)
+
+	modelsHTML := "<li>无</li>"
+	if len(successModels) > 0 {
+		var items strings.Builder
+		for _, model := range successModels {
+			items.WriteString("<li>")
+			items.WriteString(htmlEscape(model))
+			items.WriteString("</li>")
+		}
+		modelsHTML = items.String()
+	}
+
+	scoreCardHTML := fmt.Sprintf(`
+	<div class="card score-card %s">
+		<div class="score-label">今日运势评分</div>
+		<div class="score-value">%s</div>
+		<div class="score-reason">%s</div>
+	</div>`,
+		scoreClass,
+		htmlEscape(scoreText),
+		htmlEscape(scoreReason),
+	)
+
+	summaryCardHTML := ""
+	if strings.TrimSpace(summaryText) != "" {
+		summaryCardHTML = fmt.Sprintf(`
+	<div class="card summary-card">
+		<h2>结论摘要</h2>
+		<div class="summary-text">%s</div>
+	</div>`, htmlEscape(summaryText))
+	}
+
+	html := fmt.Sprintf(`<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>最终结论</title>
+<style>
+body{
+	font-family:"Microsoft YaHei","PingFang SC",Arial,sans-serif;
+	background:#f5f7fb;
+	color:#1f2937;
+	margin:0;
+	padding:24px;
+}
+.container{
+	max-width:980px;
+	margin:0 auto;
+}
+.card{
+	background:#fff;
+	border-radius:16px;
+	padding:24px;
+	box-shadow:0 8px 30px rgba(0,0,0,.08);
+	margin-bottom:20px;
+}
+h1{
+	margin:0 0 16px 0;
+	font-size:32px;
+}
+h2{
+	margin:0 0 14px 0;
+	font-size:22px;
+	color:#111827;
+}
+.meta{
+	line-height:1.9;
+	font-size:15px;
+	color:#4b5563;
+}
+.highlight{
+	background:linear-gradient(135deg,#fff7ed,#fffbeb);
+	border:1px solid #fdba74;
+}
+.summary-card{
+	background:linear-gradient(135deg,#faf5ff,#eef2ff);
+	border:1px solid #c4b5fd;
+}
+.summary-text{
+	white-space:pre-wrap;
+	word-break:break-word;
+	line-height:1.9;
+	font-size:16px;
+	color:#312e81;
+	font-weight:600;
+}
+.score-card{
+	text-align:center;
+}
+.score-good{
+	background:linear-gradient(135deg,#ecfdf5,#dcfce7);
+	border:1px solid #86efac;
+}
+.score-good .score-label{color:#15803d;}
+.score-good .score-value{color:#166534;}
+
+.score-mid{
+	background:linear-gradient(135deg,#fffbeb,#fef3c7);
+	border:1px solid #fcd34d;
+}
+.score-mid .score-label{color:#b45309;}
+.score-mid .score-value{color:#92400e;}
+
+.score-low{
+	background:linear-gradient(135deg,#fef2f2,#fee2e2);
+	border:1px solid #fca5a5;
+}
+.score-low .score-label{color:#b91c1c;}
+.score-low .score-value{color:#991b1b;}
+
+.score-unknown{
+	background:linear-gradient(135deg,#eff6ff,#e0e7ff);
+	border:1px solid #93c5fd;
+}
+.score-unknown .score-label{color:#1d4ed8;}
+.score-unknown .score-value{color:#1e3a8a;}
+
+.score-label{
+	font-size:16px;
+	margin-bottom:10px;
+	font-weight:700;
+}
+.score-value{
+	font-size:48px;
+	line-height:1.2;
+	font-weight:800;
+	margin-bottom:10px;
+}
+.score-reason{
+	font-size:14px;
+	line-height:1.8;
+	color:#475569;
+}
+pre{
+	white-space:pre-wrap;
+	word-break:break-word;
+	background:#0f172a;
+	color:#e5e7eb;
+	padding:18px;
+	border-radius:12px;
+	line-height:1.75;
+	font-size:15px;
+	overflow:auto;
+}
+ul{
+	margin:0;
+	padding-left:22px;
+	line-height:1.9;
+}
+.note{
+	color:#6b7280;
+	font-size:14px;
+	line-height:1.8;
+}
+.badge{
+	display:inline-block;
+	padding:6px 12px;
+	border-radius:999px;
+	background:#dbeafe;
+	color:#1d4ed8;
+	font-size:13px;
+	margin-bottom:12px;
+}
+</style>
+</head>
+<body>
+<div class="container">
+	<div class="card">
+		<div class="badge">自动生成</div>
+		<h1>最终结论</h1>
+		<div class="meta">
+			<div><strong>生成时间：</strong>%s</div>
+			<div><strong>问题：</strong>%s</div>
+			<div><strong>总耗时：</strong>%s</div>
+		</div>
+	</div>
+
+	%s
+
+	%s
+
+	<div class="card">
+		<h2>成功返回的模型</h2>
+		<ul>%s</ul>
+	</div>
+
+	<div class="card highlight">
+		<h2>最终采用结论</h2>
+		<pre>%s</pre>
+	</div>
+
+	<div class="card">
+		<h2>查看说明</h2>
+		<div class="note">
+			<div>• 如需查看每个模型的原始输出，请打开同目录下的各模型报告文件。</div>
+			<div>• 如需查看完整横向比较，请打开 <strong>summary.md</strong> 与 <strong>judge.md</strong>。</div>
+		</div>
+	</div>
+</div>
+</body>
+</html>`,
+		t.Format("2006-01-02 15:04:05"),
+		htmlEscape(prompt),
+		totalDuration.Round(time.Millisecond),
+		scoreCardHTML,
+		summaryCardHTML,
+		modelsHTML,
+		htmlEscape(finalContent),
+	)
+
+	if err := os.WriteFile(path, []byte(html), 0644); err != nil {
 		return "", err
 	}
 
@@ -1499,20 +1685,242 @@ func firstSuccessfulResult(results []ModelResult) *ModelResult {
 	return nil
 }
 
+func extractFortuneScore(judgeResult JudgeResult) (string, string) {
+	if judgeResult.Err != nil || strings.TrimSpace(judgeResult.Content) == "" {
+		return "暂无评分", "裁判模型未成功返回，暂时无法提取今日运势评分。"
+	}
+
+	lines := strings.Split(judgeResult.Content, "\n")
+	score := ""
+	reason := ""
+
+	for i, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		compact := strings.ReplaceAll(line, " ", "")
+		if strings.Contains(compact, "今日运势评分") {
+			if idx := strings.Index(compact, "："); idx >= 0 && idx < len(compact)-1 {
+				score = strings.TrimSpace(compact[idx+len("："):])
+			} else if idx := strings.Index(compact, ":"); idx >= 0 && idx < len(compact)-1 {
+				score = strings.TrimSpace(compact[idx+1:])
+			}
+
+			if score == "" && i+1 < len(lines) {
+				nextLine := strings.TrimSpace(lines[i+1])
+				if strings.Contains(nextLine, "/10") {
+					score = nextLine
+				}
+			}
+
+			for j := i + 1; j < len(lines) && j <= i+3; j++ {
+				nextLine := strings.TrimSpace(lines[j])
+				if nextLine == "" {
+					continue
+				}
+				if isSectionHeading(nextLine, 2) {
+					break
+				}
+				if reason == "" && !strings.Contains(nextLine, "/10") {
+					reason = nextLine
+					break
+				}
+			}
+			break
+		}
+	}
+
+	if score == "" {
+		for _, rawLine := range lines {
+			line := strings.TrimSpace(rawLine)
+			if strings.Contains(line, "/10") {
+				score = line
+				break
+			}
+		}
+	}
+
+	if score == "" {
+		score = "未识别"
+	}
+	if reason == "" {
+		reason = "已生成最终结论，但未识别到明确的评分理由。"
+	}
+
+	return score, reason
+}
+
+func buildFinalContentWithoutScore(content string) string {
+	lines := strings.Split(content, "\n")
+	result := make([]string, 0, len(lines))
+
+	skipping := false
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+
+		if isSectionHeading(line, 1) && strings.Contains(line, "今日运势评分") {
+			skipping = true
+			continue
+		}
+
+		if skipping {
+			if isAnyMainSectionHeading(line) {
+				skipping = false
+				result = append(result, rawLine)
+			}
+			continue
+		}
+
+		result = append(result, rawLine)
+	}
+
+	cleaned := strings.TrimSpace(strings.Join(result, "\n"))
+	if cleaned == "" {
+		return content
+	}
+	return cleaned
+}
+
+func extractFinalConclusionSummary(content string) string {
+	lines := strings.Split(content, "\n")
+	collecting := false
+	collected := make([]string, 0)
+
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+
+		if !collecting && isSectionHeading(line, 2) && strings.Contains(line, "最终结论") {
+			collecting = true
+			continue
+		}
+
+		if collecting {
+			if line == "" {
+				if len(collected) > 0 {
+					collected = append(collected, "")
+				}
+				continue
+			}
+			if isAnyMainSectionHeading(line) {
+				break
+			}
+			collected = append(collected, line)
+		}
+	}
+
+	summary := strings.TrimSpace(strings.Join(collected, "\n"))
+	if summary != "" {
+		return summary
+	}
+
+	fallback := buildFinalContentWithoutScore(content)
+	if len([]rune(fallback)) > 180 {
+		runes := []rune(fallback)
+		return strings.TrimSpace(string(runes[:180])) + "..."
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func isAnyMainSectionHeading(line string) bool {
+	for i := 1; i <= 6; i++ {
+		if isSectionHeading(line, i) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSectionHeading(line string, num int) bool {
+	line = strings.TrimSpace(line)
+	cnNums := []string{"一", "二", "三", "四", "五", "六", "七", "八", "九", "十"}
+	if num >= 1 && num <= len(cnNums) {
+		if strings.HasPrefix(line, cnNums[num-1]+"、") {
+			return true
+		}
+	}
+	if strings.HasPrefix(line, fmt.Sprintf("%d.", num)) {
+		return true
+	}
+	if strings.HasPrefix(line, fmt.Sprintf("%d、", num)) {
+		return true
+	}
+	return false
+}
+
+func fortuneScoreClass(scoreText string) string {
+	value, ok := parseFortuneScore(scoreText)
+	if !ok {
+		return "score-unknown"
+	}
+	if value >= 8.0 {
+		return "score-good"
+	}
+	if value >= 6.0 {
+		return "score-mid"
+	}
+	return "score-low"
+}
+
+func parseFortuneScore(scoreText string) (float64, bool) {
+	s := strings.TrimSpace(scoreText)
+	if s == "" {
+		return 0, false
+	}
+
+	if idx := strings.Index(s, "/10"); idx > 0 {
+		s = strings.TrimSpace(s[:idx])
+	}
+
+	replacer := strings.NewReplacer(
+		"：", "",
+		":", "",
+		"分", "",
+		"今日运势评分", "",
+		"一、", "",
+		"1.", "",
+		"1、", "",
+		"=", "",
+	)
+	s = replacer.Replace(s)
+	s = strings.TrimSpace(s)
+
+	if s == "" {
+		return 0, false
+	}
+
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
 func openInDefaultBrowser(path string) error {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return err
 	}
 
+	target := "file:///" + filepath.ToSlash(absPath)
+	fmt.Println("准备打开文件:", target)
+
 	switch runtime.GOOS {
 	case "windows":
-		return exec.Command("cmd", "/c", "start", "", absPath).Start()
+		return exec.Command("cmd", "/c", "start", "", target).Run()
 	case "darwin":
-		return exec.Command("open", absPath).Start()
+		return exec.Command("open", target).Run()
 	default:
-		return exec.Command("xdg-open", absPath).Start()
+		return exec.Command("xdg-open", target).Run()
 	}
+}
+
+func htmlEscape(s string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"\"", "&quot;",
+		"'", "&#39;",
+	)
+	return replacer.Replace(s)
 }
 
 func sanitizeFileName(name string) string {
