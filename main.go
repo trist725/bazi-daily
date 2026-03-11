@@ -138,14 +138,14 @@ var appConfig = Config{
 	JudgePrompt:  "你是一个严谨的结果评审助手。请基于多个模型对同一问题的输出结果，进行横向比较，并输出：1）整体结论；2）每个模型的优缺点；3）哪个模型最完整；4）哪个模型最稳定；5）推荐最终采用哪个模型及理由。请使用简洁清晰的中文。",
 
 	JudgeEnabled:  true,
-	JudgeModel:    "gemini-2.5-pro",
+	JudgeModel:    "gemini-3.1-pro-preview",
 	JudgeProvider: "gemini",
 
 	ModelFilter: []string{"qwen", "llama", "gemma", "glm"},
 	ModelSkip:   []string{"embed", "embedding", "bge", "rerank", "reranker", "llava", "vision", "vl", "32b", "72b"},
 	ModelLimit:  10,
 
-	LocalCallTimeout:       360 * time.Second,
+	LocalCallTimeout:       10 * time.Minute,
 	LocalUnloadTimeout:     25 * time.Second,
 	LocalPreflightTimeout:  20 * time.Second,
 	LocalRetryCount:        2,
@@ -159,9 +159,9 @@ var appConfig = Config{
 	CloudModels: []CloudModelConfig{
 		{
 			Enabled:  true,
-			Name:     "gemini-3.1-pro",
+			Name:     "gemini-flash-latest",
 			Provider: "gemini",
-			APIKey:   "<YOUR_GEMINI_API_KEY>",
+			APIKey:   "",
 		},
 	},
 }
@@ -169,6 +169,17 @@ var appConfig = Config{
 func main() {
 	startedAt := time.Now()
 	now := startedAt
+	promptContent := buildPrompt(now)
+
+	reportDir, err := createReportDir(now)
+	if err != nil {
+		fmt.Println("创建报告目录失败:", err)
+		return
+	}
+	if err := saveRunMeta(reportDir, now, promptContent); err != nil {
+		fmt.Println("保存运行信息失败:", err)
+		return
+	}
 
 	if appConfig.StartupCleanupEnabled {
 		cleanupStart := time.Now()
@@ -176,6 +187,7 @@ func main() {
 			fmt.Println("启动前清理运行中模型失败:", err)
 			fmt.Printf("启动前清理耗时: %s\n", time.Since(cleanupStart).Round(time.Millisecond))
 			if !appConfig.ContinueOnCleanupError {
+				_ = saveSummaryReport(reportDir, now, promptContent, nil, JudgeResult{Enabled: false}, time.Since(startedAt))
 				return
 			}
 		} else {
@@ -186,28 +198,73 @@ func main() {
 	localModels, err := resolveModels(appConfig.BaseURL, appConfig)
 	if err != nil {
 		fmt.Println("获取本地模型列表失败:", err)
+		_ = saveSummaryReport(reportDir, now, promptContent, nil, JudgeResult{Enabled: false}, time.Since(startedAt))
 		return
 	}
 
 	cloudModels := enabledCloudModels(appConfig.CloudModels)
 	if len(localModels) == 0 && len(cloudModels) == 0 {
 		fmt.Println("没有可用模型，请检查本地 Ollama 模型或云端配置。")
+		_ = saveSummaryReport(reportDir, now, promptContent, nil, JudgeResult{Enabled: false}, time.Since(startedAt))
 		return
 	}
 
-	allModels := append([]string{}, localModels...)
-	allModels = append(allModels, resolveCloudModelNames(appConfig)...)
+	allModels := append([]string{}, resolveCloudModelNames(appConfig)...)
+	allModels = append(allModels, localModels...)
 
 	fmt.Println("本次将串行调用以下模型：")
 	for i, model := range allModels {
 		fmt.Printf("%d. %s\n", i+1, model)
 	}
 
-	promptContent := buildPrompt(now)
-	results := compareAllModelsSequentially(appConfig, localModels, promptContent)
+	results := make([]ModelResult, 0, len(localModels)+len(cloudModels))
+
+	for _, cloud := range appConfig.CloudModels {
+		if !cloud.Enabled {
+			continue
+		}
+
+		fmt.Printf("[云端优先] 正在调用云端模型: %s\n", cloud.Name)
+
+		modelTotalStart := time.Now()
+		callStart := time.Now()
+		content, callErr := chatWithCloudModel(cloud, appConfig.SystemPrompt, promptContent, appConfig.CloudCallTimeout)
+		callCost := time.Since(callStart).Round(time.Millisecond)
+
+		result := ModelResult{
+			Model:         cloud.Name,
+			Content:       content,
+			Err:           callErr,
+			Provider:      cloud.Provider,
+			CallDuration:  callCost,
+			TotalDuration: time.Since(modelTotalStart).Round(time.Millisecond),
+		}
+
+		results = append(results, result)
+
+		if saveErr := saveSingleModelReport(reportDir, now, result); saveErr != nil {
+			fmt.Printf("保存模型报告失败(%s): %v\n", cloud.Name, saveErr)
+		}
+
+		fmt.Printf("[云端优先] 云端模型 %s 调用耗时: %s\n", cloud.Name, callCost)
+
+		if callErr != nil {
+			fmt.Printf("[云端优先] 云端模型 %s 调用失败，程序终止: %v\n", cloud.Name, callErr)
+			_ = saveSummaryReport(reportDir, now, promptContent, results, JudgeResult{Enabled: false}, time.Since(startedAt))
+			return
+		}
+
+		fmt.Printf("[云端优先] 云端模型 %s 调用完成\n", cloud.Name)
+		fmt.Printf("[云端优先] 云端模型 %s 总耗时: %s\n", cloud.Name, result.TotalDuration)
+
+		time.Sleep(appConfig.CloudSwitchDelay)
+	}
+
+	localResults := compareAllModelsSequentially(appConfig, localModels, promptContent, reportDir, now)
+	results = append(results, localResults...)
 
 	judgeResult := JudgeResult{Enabled: appConfig.JudgeEnabled}
-	if appConfig.JudgeEnabled {
+	if appConfig.JudgeEnabled && hasSuccessfulResult(results) {
 		judgeTotalStart := time.Now()
 		judgeModel := resolveJudgeModel(localModels, appConfig)
 		fmt.Printf("正在调用裁判模型: %s\n", judgeModel)
@@ -221,11 +278,11 @@ func main() {
 			Content:      judgeContent,
 			Err:          judgeErr,
 			Enabled:      true,
-			Provider:     appConfig.JudgeProvider,
+			Provider:     judgeResultProvider(appConfig, judgeModel, localModels),
 			CallDuration: judgeCallCost,
 		}
 
-		if appConfig.JudgeProvider == "ollama" && isLocalModel(judgeModel, localModels) {
+		if judgeResult.Provider == "ollama" && isLocalModel(judgeModel, localModels) {
 			releaseStart := time.Now()
 			if releaseErr := unloadAndWaitAllClear(
 				appConfig.BaseURL,
@@ -249,11 +306,16 @@ func main() {
 		} else {
 			fmt.Println("裁判模型调用完成")
 		}
+
+		if err := saveJudgeReport(reportDir, now, judgeResult); err != nil {
+			fmt.Println("保存裁判报告失败:", err)
+		}
+	} else if appConfig.JudgeEnabled {
+		fmt.Println("没有任何模型成功返回，跳过裁判模型。")
 	}
 
-	reportDir, err := saveComparisonReports(now, promptContent, results, judgeResult, time.Since(startedAt))
-	if err != nil {
-		fmt.Println("保存报告失败:", err)
+	if err := saveSummaryReport(reportDir, now, promptContent, results, judgeResult, time.Since(startedAt)); err != nil {
+		fmt.Println("保存汇总报告失败:", err)
 		return
 	}
 
@@ -269,7 +331,7 @@ func main() {
 		fmt.Println(result.Content)
 	}
 
-	if judgeResult.Enabled {
+	if judgeResult.Enabled && hasSuccessfulResult(results) {
 		fmt.Println("\n========== 裁判模型总结 ==========")
 		fmt.Printf("裁判模型: %s\n\n", judgeResult.Model)
 		if judgeResult.Err != nil {
@@ -295,7 +357,7 @@ func buildPrompt(t time.Time) string {
 	return fmt.Sprintf("%s，%s年%s月%s日", currentDate, yearGanzhi, monthGanzhi, dayGanzhi)
 }
 
-func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt string) []ModelResult {
+func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt string, reportDir string, reportTime time.Time) []ModelResult {
 	results := make([]ModelResult, 0, len(localModels)+len(cfg.CloudModels))
 	total := len(localModels) + len(enabledCloudModels(cfg.CloudModels))
 	index := 0
@@ -312,12 +374,17 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 			fmt.Printf("[%d/%d] %v\n", index, total, err)
 			fmt.Printf("[%d/%d] 调用前清理耗时: %s\n", index, total, time.Since(preflightStart).Round(time.Millisecond))
 
-			results = append(results, ModelResult{
+			result := ModelResult{
 				Model:         modelName,
 				Err:           err,
 				Provider:      "ollama",
 				TotalDuration: time.Since(modelTotalStart).Round(time.Millisecond),
-			})
+			}
+			results = append(results, result)
+
+			if saveErr := saveSingleModelReport(reportDir, reportTime, result); saveErr != nil {
+				fmt.Printf("[%d/%d] 保存模型报告失败(%s): %v\n", index, total, modelName, saveErr)
+			}
 
 			if !cfg.ContinueOnCleanupError {
 				break
@@ -371,6 +438,11 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 		fmt.Printf("[%d/%d] 模型 %s 总耗时: %s\n", index, total, modelName, result.TotalDuration)
 
 		results = append(results, result)
+
+		if saveErr := saveSingleModelReport(reportDir, reportTime, result); saveErr != nil {
+			fmt.Printf("[%d/%d] 保存模型报告失败(%s): %v\n", index, total, modelName, saveErr)
+		}
+
 		time.Sleep(cfg.LocalSwitchDelay)
 	}
 
@@ -409,6 +481,11 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 		fmt.Printf("[%d/%d] 云端模型 %s 总耗时: %s\n", index, total, cloud.Name, result.TotalDuration)
 
 		results = append(results, result)
+
+		if saveErr := saveSingleModelReport(reportDir, reportTime, result); saveErr != nil {
+			fmt.Printf("[%d/%d] 保存模型报告失败(%s): %v\n", index, total, cloud.Name, saveErr)
+		}
+
 		time.Sleep(cfg.CloudSwitchDelay)
 	}
 
@@ -827,7 +904,16 @@ func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, tim
 func judgeModelResults(cfg Config, judgeModel, originalPrompt string, results []ModelResult) (string, error) {
 	judgeInput := buildJudgeInput(originalPrompt, results)
 
-	if cfg.JudgeProvider == "gemini" {
+	if isLocalModel(judgeModel, applyModelSelectionRulesMust(resolveInstalledModelsSafe(cfg.BaseURL), cfg)) {
+		return chatWithOllama(cfg.BaseURL, judgeModel, cfg.JudgePrompt, judgeInput, cfg.LocalCallTimeout)
+	}
+
+	cloud, ok := findCloudModelConfig(judgeModel, cfg.CloudModels)
+	if ok {
+		return chatWithCloudModel(cloud, cfg.JudgePrompt, judgeInput, cfg.CloudCallTimeout)
+	}
+
+	if strings.EqualFold(strings.TrimSpace(cfg.JudgeProvider), "gemini") {
 		cloud, ok := findCloudModelConfig(judgeModel, cfg.CloudModels)
 		if !ok {
 			return "", fmt.Errorf("未找到裁判云端模型配置: %s", judgeModel)
@@ -882,9 +968,9 @@ func resolveJudgeModel(localModels []string, cfg Config) string {
 	if strings.TrimSpace(cfg.JudgeModel) != "" {
 		return cfg.JudgeModel
 	}
-	if cfg.JudgeProvider == "gemini" {
+	if strings.EqualFold(strings.TrimSpace(cfg.JudgeProvider), "gemini") {
 		for _, cloud := range cfg.CloudModels {
-			if cloud.Enabled && cloud.Provider == "gemini" && strings.TrimSpace(cloud.Name) != "" {
+			if cloud.Enabled && strings.EqualFold(cloud.Provider, "gemini") && strings.TrimSpace(cloud.Name) != "" {
 				return cloud.Name
 			}
 		}
@@ -1072,65 +1158,80 @@ func findCloudModelConfig(model string, cloudModels []CloudModelConfig) (CloudMo
 	return CloudModelConfig{}, false
 }
 
-func saveComparisonReports(
+func createReportDir(t time.Time) (string, error) {
+	reportDir := filepath.Join("reports", t.Format("2006-01-02_15-04-05"))
+	if err := os.MkdirAll(reportDir, 0755); err != nil {
+		return "", fmt.Errorf("创建报告目录失败: %w", err)
+	}
+	return reportDir, nil
+}
+
+func saveRunMeta(reportDir string, t time.Time, prompt string) error {
+	content := fmt.Sprintf(
+		"# 运行信息\n\n- 启动时间：`%s`\n- 请求内容：`%s`\n",
+		t.Format("2006-01-02 15:04:05"),
+		prompt,
+	)
+	path := filepath.Join(reportDir, "run.md")
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
+func saveSingleModelReport(reportDir string, t time.Time, result ModelResult) error {
+	filename := sanitizeFileName(result.Model) + ".md"
+	path := filepath.Join(reportDir, filename)
+
+	var content string
+	if result.Err != nil {
+		content = fmt.Sprintf(
+			"# 模型报告\n\n- 模型：`%s`\n- 提供方：`%s`\n- 生成时间：`%s`\n- 调用耗时：`%s`\n- 总耗时：`%s`\n- 状态：失败\n- 错误：`%v`\n",
+			result.Model,
+			result.Provider,
+			t.Format("2006-01-02 15:04:05"),
+			result.CallDuration.Round(time.Millisecond),
+			result.TotalDuration.Round(time.Millisecond),
+			result.Err,
+		)
+	} else {
+		content = fmt.Sprintf(
+			"# 模型报告\n\n- 模型：`%s`\n- 提供方：`%s`\n- 生成时间：`%s`\n- 调用耗时：`%s`\n- 总耗时：`%s`\n- 状态：成功\n\n## 输出内容\n\n```text\n%s\n```\n",
+			result.Model,
+			result.Provider,
+			t.Format("2006-01-02 15:04:05"),
+			result.CallDuration.Round(time.Millisecond),
+			result.TotalDuration.Round(time.Millisecond),
+			result.Content,
+		)
+	}
+
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
+func saveJudgeReport(reportDir string, t time.Time, judgeResult JudgeResult) error {
+	judgePath := filepath.Join(reportDir, "judge.md")
+	judgeContent := buildJudgeReport(t, judgeResult)
+	return os.WriteFile(judgePath, []byte(judgeContent), 0644)
+}
+
+func saveSummaryReport(
+	reportDir string,
 	t time.Time,
 	prompt string,
 	results []ModelResult,
 	judgeResult JudgeResult,
 	totalDuration time.Duration,
-) (string, error) {
-	reportDir := filepath.Join("reports", t.Format("2006-01-02_15-04-05"))
-	if err := os.MkdirAll(reportDir, 0755); err != nil {
-		return "", fmt.Errorf("创建报告目录失败: %w", err)
-	}
-
-	for _, result := range results {
-		filename := sanitizeFileName(result.Model) + ".md"
-		path := filepath.Join(reportDir, filename)
-
-		var content string
-		if result.Err != nil {
-			content = fmt.Sprintf(
-				"# 模型报告\n\n- 模型：`%s`\n- 提供方：`%s`\n- 生成时间：`%s`\n- 调用耗时：`%s`\n- 总耗时：`%s`\n- 状态：失败\n- 错误：`%v`\n",
-				result.Model,
-				result.Provider,
-				t.Format("2006-01-02 15:04:05"),
-				result.CallDuration.Round(time.Millisecond),
-				result.TotalDuration.Round(time.Millisecond),
-				result.Err,
-			)
-		} else {
-			content = fmt.Sprintf(
-				"# 模型报告\n\n- 模型：`%s`\n- 提供方：`%s`\n- 生成时间：`%s`\n- 调用耗时：`%s`\n- 总耗时：`%s`\n- 状态：成功\n\n## 输出内容\n\n```text\n%s\n```\n",
-				result.Model,
-				result.Provider,
-				t.Format("2006-01-02 15:04:05"),
-				result.CallDuration.Round(time.Millisecond),
-				result.TotalDuration.Round(time.Millisecond),
-				result.Content,
-			)
-		}
-
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			return "", fmt.Errorf("保存模型报告失败(%s): %w", result.Model, err)
-		}
-	}
-
+) error {
 	summary := buildSummaryReport(t, prompt, results, judgeResult, totalDuration)
 	summaryPath := filepath.Join(reportDir, "summary.md")
-	if err := os.WriteFile(summaryPath, []byte(summary), 0644); err != nil {
-		return "", fmt.Errorf("保存汇总报告失败: %w", err)
-	}
+	return os.WriteFile(summaryPath, []byte(summary), 0644)
+}
 
-	if judgeResult.Enabled {
-		judgePath := filepath.Join(reportDir, "judge.md")
-		judgeContent := buildJudgeReport(t, judgeResult)
-		if err := os.WriteFile(judgePath, []byte(judgeContent), 0644); err != nil {
-			return "", fmt.Errorf("保存裁判报告失败: %w", err)
+func hasSuccessfulResult(results []ModelResult) bool {
+	for _, result := range results {
+		if result.Err == nil && strings.TrimSpace(result.Content) != "" {
+			return true
 		}
 	}
-
-	return reportDir, nil
+	return false
 }
 
 func buildSummaryReport(
@@ -1148,6 +1249,10 @@ func buildSummaryReport(
 	writeString(&builder, fmt.Sprintf("- 整轮任务总耗时：`%s`\n\n", totalDuration.Round(time.Millisecond)))
 
 	writeString(&builder, "## 参与对比的模型结果\n\n")
+	if len(results) == 0 {
+		writeString(&builder, "- 暂无模型结果\n\n")
+	}
+
 	for _, result := range results {
 		writeString(&builder, fmt.Sprintf("## 模型：`%s`\n\n", result.Model))
 		writeString(&builder, fmt.Sprintf("- 提供方：`%s`\n", result.Provider))
@@ -1180,6 +1285,8 @@ func buildSummaryReport(
 		if judgeResult.Err != nil {
 			writeString(&builder, "- 状态：失败\n")
 			writeString(&builder, fmt.Sprintf("- 错误：`%v`\n\n", judgeResult.Err))
+		} else if strings.TrimSpace(judgeResult.Model) == "" {
+			writeString(&builder, "- 状态：未执行\n\n")
 		} else {
 			writeString(&builder, "- 状态：成功\n\n")
 			writeString(&builder, "### 裁判结论\n\n")
@@ -1241,4 +1348,32 @@ func sanitizeFileName(name string) string {
 
 func writeString(builder *strings.Builder, s string) {
 	_, _ = builder.WriteString(s)
+}
+
+func judgeResultProvider(cfg Config, judgeModel string, localModels []string) string {
+	if isLocalModel(judgeModel, localModels) {
+		return "ollama"
+	}
+	if cloud, ok := findCloudModelConfig(judgeModel, cfg.CloudModels); ok {
+		return cloud.Provider
+	}
+	if strings.TrimSpace(cfg.JudgeProvider) != "" {
+		return cfg.JudgeProvider
+	}
+	return "unknown"
+}
+
+func resolveInstalledModelsSafe(baseURL string) []string {
+	models, err := fetchInstalledModels(baseURL)
+	if err != nil {
+		return nil
+	}
+	return models
+}
+
+func applyModelSelectionRulesMust(models []string, cfg Config) []string {
+	if len(models) == 0 {
+		return nil
+	}
+	return applyModelSelectionRules(models, cfg)
 }
