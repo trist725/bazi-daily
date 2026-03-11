@@ -129,13 +129,16 @@ type Config struct {
 	StartupCleanupEnabled  bool
 	ContinueOnCleanupError bool
 
+	LocalReleaseRetryCount int
+	LocalReleaseRetryDelay time.Duration
+
 	CloudModels []CloudModelConfig
 }
 
 var appConfig = Config{
 	BaseURL:      "http://localhost:11434",
 	SystemPrompt: "你现在是我的私人能量管理系统。请严格按照我的原局（庚午、癸未、辛卯、戊戌）与今日干支进行推演，输出：核心引动、能量体感预测、今日策略（宜/忌）。",
-	JudgePrompt:  "你是一个严谨的结果评审助手。请基于多个模型对同一问题的输出结果，进行横向比较，并输出：1）整体结论；2）每个模型的优缺点；3）哪个模型最完整；4）哪个模型最稳定；5）推荐最终采用哪个模型及理由。请使用简洁清晰的中文。",
+	JudgePrompt:  "你是一个严谨的最终结论整合助手。你会收到多个模型针对同一问题的输出结果。请先横向比较，再生成一份可直接采用的最终答案。请严格按以下结构输出：1）最终结论：直接给出整合后的最终答案，禁止只做评价不下结论；2）模型对比：分别说明每个模型的优点与不足；3）最佳模型：指出哪个模型最完整、哪个模型最稳定；4）采用建议：说明最终主要参考了哪些模型、为什么；5）置信度：给出你对最终结论的整体置信度（高/中/低）及原因。请使用简洁、明确、可落地的中文。",
 
 	JudgeEnabled:  true,
 	JudgeModel:    "gemini-flash-latest",
@@ -153,15 +156,18 @@ var appConfig = Config{
 	CloudCallTimeout:       120 * time.Second,
 	CloudSwitchDelay:       1 * time.Second,
 	RunningPollInterval:    700 * time.Millisecond,
-	StartupCleanupEnabled:  true,
+	StartupCleanupEnabled:  false,
 	ContinueOnCleanupError: false,
+
+	LocalReleaseRetryCount: 3,
+	LocalReleaseRetryDelay: 2 * time.Second,
 
 	CloudModels: []CloudModelConfig{
 		{
 			Enabled:  true,
 			Name:     "gemini-flash-latest",
 			Provider: "gemini",
-			APIKey:   "",
+			APIKey:   "AIzaSyCLTRsQIA1nh_oFZgQBfaRzNn6BSfm6dxU",
 		},
 	},
 }
@@ -181,19 +187,14 @@ func main() {
 		return
 	}
 
-	if appConfig.StartupCleanupEnabled {
+	defer func() {
 		cleanupStart := time.Now()
-		if err := ensureNoModelsRunning(appConfig.BaseURL, appConfig.LocalPreflightTimeout, appConfig.RunningPollInterval); err != nil {
-			fmt.Println("启动前清理运行中模型失败:", err)
-			fmt.Printf("启动前清理耗时: %s\n", time.Since(cleanupStart).Round(time.Millisecond))
-			if !appConfig.ContinueOnCleanupError {
-				_ = saveSummaryReport(reportDir, now, promptContent, nil, JudgeResult{Enabled: false}, time.Since(startedAt))
-				return
-			}
+		if err := finalCleanupLocalModels(appConfig.BaseURL, appConfig.LocalUnloadTimeout, appConfig.RunningPollInterval); err != nil {
+			fmt.Printf("程序结束前兜底清理失败: %v\n", err)
 		} else {
-			fmt.Printf("启动前清理耗时: %s\n", time.Since(cleanupStart).Round(time.Millisecond))
+			fmt.Printf("程序结束前兜底清理完成，耗时: %s\n", time.Since(cleanupStart).Round(time.Millisecond))
 		}
-	}
+	}()
 
 	localModels, err := resolveModels(appConfig.BaseURL, appConfig)
 	if err != nil {
@@ -219,48 +220,14 @@ func main() {
 
 	results := make([]ModelResult, 0, len(localModels)+len(cloudModels))
 
-	for _, cloud := range appConfig.CloudModels {
-		if !cloud.Enabled {
-			continue
-		}
-
-		fmt.Printf("[云端优先] 正在调用云端模型: %s\n", cloud.Name)
-
-		modelTotalStart := time.Now()
-		callStart := time.Now()
-		content, callErr := chatWithCloudModel(cloud, appConfig.SystemPrompt, promptContent, appConfig.CloudCallTimeout)
-		callCost := time.Since(callStart).Round(time.Millisecond)
-
-		result := ModelResult{
-			Model:         cloud.Name,
-			Content:       content,
-			Err:           callErr,
-			Provider:      cloud.Provider,
-			CallDuration:  callCost,
-			TotalDuration: time.Since(modelTotalStart).Round(time.Millisecond),
-		}
-
-		results = append(results, result)
-
-		if saveErr := saveSingleModelReport(reportDir, now, result); saveErr != nil {
-			fmt.Printf("保存模型报告失败(%s): %v\n", cloud.Name, saveErr)
-		}
-
-		fmt.Printf("[云端优先] 云端模型 %s 调用耗时: %s\n", cloud.Name, callCost)
-
-		if callErr != nil {
-			fmt.Printf("[云端优先] 云端模型 %s 调用失败，程序终止: %v\n", cloud.Name, callErr)
-			_ = saveSummaryReport(reportDir, now, promptContent, results, JudgeResult{Enabled: false}, time.Since(startedAt))
-			return
-		}
-
-		fmt.Printf("[云端优先] 云端模型 %s 调用完成\n", cloud.Name)
-		fmt.Printf("[云端优先] 云端模型 %s 总耗时: %s\n", cloud.Name, result.TotalDuration)
-
-		time.Sleep(appConfig.CloudSwitchDelay)
+	cloudResults, cloudErr := runCloudModelsFirst(appConfig, promptContent, reportDir, now, startedAt)
+	results = append(results, cloudResults...)
+	if cloudErr != nil {
+		_ = saveSummaryReport(reportDir, now, promptContent, results, JudgeResult{Enabled: false}, time.Since(startedAt))
+		return
 	}
 
-	localResults := compareAllModelsSequentially(appConfig, localModels, promptContent, reportDir, now)
+	localResults := compareLocalModelsSequentially(appConfig, localModels, promptContent, reportDir, now)
 	results = append(results, localResults...)
 
 	judgeResult := JudgeResult{Enabled: appConfig.JudgeEnabled}
@@ -270,7 +237,7 @@ func main() {
 		fmt.Printf("正在调用裁判模型: %s\n", judgeModel)
 
 		judgeCallStart := time.Now()
-		judgeContent, judgeErr := judgeModelResults(appConfig, judgeModel, promptContent, results)
+		judgeContent, judgeErr := judgeModelResults(appConfig, localModels, judgeModel, promptContent, results)
 		judgeCallCost := time.Since(judgeCallStart).Round(time.Millisecond)
 
 		judgeResult = JudgeResult{
@@ -284,11 +251,13 @@ func main() {
 
 		if judgeResult.Provider == "ollama" && isLocalModel(judgeModel, localModels) {
 			releaseStart := time.Now()
-			if releaseErr := unloadAndWaitAllClear(
+			if releaseErr := releaseLocalModelWithRetry(
 				appConfig.BaseURL,
 				judgeModel,
 				appConfig.LocalUnloadTimeout,
 				appConfig.RunningPollInterval,
+				appConfig.LocalReleaseRetryCount,
+				appConfig.LocalReleaseRetryDelay,
 			); releaseErr != nil {
 				fmt.Printf("裁判模型卸载或等待释放失败: %v\n", releaseErr)
 			} else {
@@ -357,9 +326,58 @@ func buildPrompt(t time.Time) string {
 	return fmt.Sprintf("%s，%s年%s月%s日", currentDate, yearGanzhi, monthGanzhi, dayGanzhi)
 }
 
-func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt string, reportDir string, reportTime time.Time) []ModelResult {
-	results := make([]ModelResult, 0, len(localModels)+len(cfg.CloudModels))
-	total := len(localModels) + len(enabledCloudModels(cfg.CloudModels))
+func runCloudModelsFirst(
+	cfg Config,
+	userPrompt string,
+	reportDir string,
+	reportTime time.Time,
+	startedAt time.Time,
+) ([]ModelResult, error) {
+	cloudModels := enabledCloudModels(cfg.CloudModels)
+	results := make([]ModelResult, 0, len(cloudModels))
+
+	for i, cloud := range cloudModels {
+		fmt.Printf("[云端优先 %d/%d] 正在调用云端模型: %s\n", i+1, len(cloudModels), cloud.Name)
+
+		modelTotalStart := time.Now()
+		callStart := time.Now()
+		content, callErr := chatWithCloudModel(cloud, cfg.SystemPrompt, userPrompt, cfg.CloudCallTimeout)
+		callCost := time.Since(callStart).Round(time.Millisecond)
+
+		result := ModelResult{
+			Model:         cloud.Name,
+			Content:       content,
+			Err:           callErr,
+			Provider:      cloud.Provider,
+			CallDuration:  callCost,
+			TotalDuration: time.Since(modelTotalStart).Round(time.Millisecond),
+		}
+		results = append(results, result)
+
+		if saveErr := saveSingleModelReport(reportDir, reportTime, result); saveErr != nil {
+			fmt.Printf("保存模型报告失败(%s): %v\n", cloud.Name, saveErr)
+		}
+
+		fmt.Printf("[云端优先 %d/%d] 云端模型 %s 调用耗时: %s\n", i+1, len(cloudModels), cloud.Name, callCost)
+
+		if callErr != nil {
+			fmt.Printf("[云端优先 %d/%d] 云端模型 %s 调用失败，程序终止: %v\n", i+1, len(cloudModels), cloud.Name, callErr)
+			_ = saveSummaryReport(reportDir, reportTime, userPrompt, results, JudgeResult{Enabled: false}, time.Since(startedAt))
+			return results, callErr
+		}
+
+		fmt.Printf("[云端优先 %d/%d] 云端模型 %s 调用完成\n", i+1, len(cloudModels), cloud.Name)
+		fmt.Printf("[云端优先 %d/%d] 云端模型 %s 总耗时: %s\n", i+1, len(cloudModels), cloud.Name, result.TotalDuration)
+
+		time.Sleep(cfg.CloudSwitchDelay)
+	}
+
+	return results, nil
+}
+
+func compareLocalModelsSequentially(cfg Config, localModels []string, userPrompt string, reportDir string, reportTime time.Time) []ModelResult {
+	results := make([]ModelResult, 0, len(localModels))
+	total := len(localModels)
 	index := 0
 
 	for _, modelName := range localModels {
@@ -422,11 +440,13 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 		}
 
 		releaseStart := time.Now()
-		if releaseErr := unloadAndWaitAllClear(
+		if releaseErr := releaseLocalModelWithRetry(
 			cfg.BaseURL,
 			modelName,
 			cfg.LocalUnloadTimeout,
 			cfg.RunningPollInterval,
+			cfg.LocalReleaseRetryCount,
+			cfg.LocalReleaseRetryDelay,
 		); releaseErr != nil {
 			fmt.Printf("[%d/%d] 模型 %s 卸载或等待释放失败: %v\n", index, total, modelName, releaseErr)
 		} else {
@@ -446,50 +466,70 @@ func compareAllModelsSequentially(cfg Config, localModels []string, userPrompt s
 		time.Sleep(cfg.LocalSwitchDelay)
 	}
 
-	for _, cloud := range cfg.CloudModels {
-		if !cloud.Enabled {
-			continue
-		}
-
-		index++
-		modelTotalStart := time.Now()
-
-		fmt.Printf("[%d/%d] 正在调用云端模型: %s\n", index, total, cloud.Name)
-
-		callStart := time.Now()
-		content, err := chatWithCloudModel(cloud, cfg.SystemPrompt, userPrompt, cfg.CloudCallTimeout)
-		callCost := time.Since(callStart).Round(time.Millisecond)
-
-		result := ModelResult{
-			Model:         cloud.Name,
-			Content:       content,
-			Err:           err,
-			Provider:      cloud.Provider,
-			CallDuration:  callCost,
-			TotalDuration: time.Since(modelTotalStart).Round(time.Millisecond),
-		}
-
-		fmt.Printf("[%d/%d] 云端模型 %s 调用耗时: %s\n", index, total, cloud.Name, callCost)
-
-		if err != nil {
-			fmt.Printf("[%d/%d] 云端模型 %s 调用失败: %v\n", index, total, cloud.Name, err)
-		} else {
-			fmt.Printf("[%d/%d] 云端模型 %s 调用完成\n", index, total, cloud.Name)
-		}
-
-		result.TotalDuration = time.Since(modelTotalStart).Round(time.Millisecond)
-		fmt.Printf("[%d/%d] 云端模型 %s 总耗时: %s\n", index, total, cloud.Name, result.TotalDuration)
-
-		results = append(results, result)
-
-		if saveErr := saveSingleModelReport(reportDir, reportTime, result); saveErr != nil {
-			fmt.Printf("[%d/%d] 保存模型报告失败(%s): %v\n", index, total, cloud.Name, saveErr)
-		}
-
-		time.Sleep(cfg.CloudSwitchDelay)
+	cleanupStart := time.Now()
+	if err := finalCleanupLocalModels(cfg.BaseURL, cfg.LocalUnloadTimeout, cfg.RunningPollInterval); err != nil {
+		fmt.Printf("本地模型批量结束后的兜底清理失败: %v\n", err)
+	} else {
+		fmt.Printf("本地模型批量结束后的兜底清理完成，耗时: %s\n", time.Since(cleanupStart).Round(time.Millisecond))
 	}
 
 	return results
+}
+
+func releaseLocalModelWithRetry(
+	baseURL, modelName string,
+	timeout time.Duration,
+	pollInterval time.Duration,
+	retryCount int,
+	retryDelay time.Duration,
+) error {
+	if retryCount < 1 {
+		retryCount = 1
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= retryCount; attempt++ {
+		err := unloadAndWaitAllClear(baseURL, modelName, timeout, pollInterval)
+		if err == nil {
+			if attempt > 1 {
+				fmt.Printf("模型 %s 第 %d/%d 次释放成功\n", modelName, attempt, retryCount)
+			}
+			return nil
+		}
+
+		lastErr = err
+		fmt.Printf("模型 %s 第 %d/%d 次释放失败: %v\n", modelName, attempt, retryCount, err)
+
+		if attempt < retryCount {
+			time.Sleep(retryDelay)
+		}
+	}
+
+	return fmt.Errorf("模型 %s 多次释放仍失败: %w", modelName, lastErr)
+}
+
+func finalCleanupLocalModels(baseURL string, timeout time.Duration, pollInterval time.Duration) error {
+	models, err := getRunningModels(baseURL)
+	if err != nil {
+		return err
+	}
+	if len(models) == 0 {
+		return nil
+	}
+
+	fmt.Printf("开始执行兜底清理，当前运行中模型: %s\n", strings.Join(models, ", "))
+
+	for _, model := range models {
+		if err := releaseLocalModelWithRetry(baseURL, model, timeout, pollInterval, 3, 2*time.Second); err != nil {
+			fmt.Printf("兜底释放模型失败(%s): %v\n", model, err)
+		}
+	}
+
+	if err := waitUntilNoModelsRunning(baseURL, timeout, pollInterval); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func chatWithOllamaWithRetry(
@@ -829,13 +869,13 @@ func chatWithCloudModel(cloud CloudModelConfig, systemPrompt, userPrompt string,
 
 func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, timeout time.Duration) (string, error) {
 	apiKey := strings.TrimSpace(cloud.APIKey)
-	if apiKey == "" || strings.Contains(apiKey, "<") {
-		return "", fmt.Errorf("Gemini API Key 未配置，请替换代码中的占位符")
+	if apiKey == "" || strings.Contains(apiKey, "<") || apiKey == "YOUR_GEMINI_API_KEY" {
+		return "", fmt.Errorf("Gemini API Key 未配置，请替换为真实 key")
 	}
 
 	url := fmt.Sprintf(
 		"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
-		cloud.Name,
+		strings.TrimSpace(cloud.Name),
 		apiKey,
 	)
 
@@ -901,10 +941,10 @@ func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, tim
 	return content, nil
 }
 
-func judgeModelResults(cfg Config, judgeModel, originalPrompt string, results []ModelResult) (string, error) {
+func judgeModelResults(cfg Config, localModels []string, judgeModel, originalPrompt string, results []ModelResult) (string, error) {
 	judgeInput := buildJudgeInput(originalPrompt, results)
 
-	if isLocalModel(judgeModel, applyModelSelectionRulesMust(resolveInstalledModelsSafe(cfg.BaseURL), cfg)) {
+	if isLocalModel(judgeModel, localModels) {
 		return chatWithOllama(cfg.BaseURL, judgeModel, cfg.JudgePrompt, judgeInput, cfg.LocalCallTimeout)
 	}
 
@@ -914,11 +954,12 @@ func judgeModelResults(cfg Config, judgeModel, originalPrompt string, results []
 	}
 
 	if strings.EqualFold(strings.TrimSpace(cfg.JudgeProvider), "gemini") {
-		cloud, ok := findCloudModelConfig(judgeModel, cfg.CloudModels)
-		if !ok {
-			return "", fmt.Errorf("未找到裁判云端模型配置: %s", judgeModel)
+		for _, cloudModel := range cfg.CloudModels {
+			if cloudModel.Enabled && strings.EqualFold(cloudModel.Provider, "gemini") {
+				return chatWithCloudModel(cloudModel, cfg.JudgePrompt, judgeInput, cfg.CloudCallTimeout)
+			}
 		}
-		return chatWithCloudModel(cloud, cfg.JudgePrompt, judgeInput, cfg.CloudCallTimeout)
+		return "", fmt.Errorf("未找到可用的 Gemini 裁判模型配置: %s", judgeModel)
 	}
 
 	return chatWithOllama(cfg.BaseURL, judgeModel, cfg.JudgePrompt, judgeInput, cfg.LocalCallTimeout)
@@ -927,10 +968,26 @@ func judgeModelResults(cfg Config, judgeModel, originalPrompt string, results []
 func buildJudgeInput(originalPrompt string, results []ModelResult) string {
 	var builder strings.Builder
 
-	writeString(&builder, "以下是同一个问题的多模型输出结果，请你做对比评审。\n\n")
+	writeString(&builder, "以下是同一个问题的多模型输出结果，请你先完成横向评审，再给出一份可以直接采用的最终结论。\n\n")
+	writeString(&builder, "【任务要求】\n")
+	writeString(&builder, "你不能只做模型优劣点评，必须在评审后输出“最终结论”。最终结论必须是整合后的可直接使用版本，而不是简单说哪个模型更好。\n\n")
 	writeString(&builder, "【原始问题】\n")
 	writeString(&builder, originalPrompt)
 	writeString(&builder, "\n\n")
+
+	successCount := 0
+	failCount := 0
+	for _, result := range results {
+		if result.Err != nil {
+			failCount++
+		} else {
+			successCount++
+		}
+	}
+
+	writeString(&builder, "【结果统计】\n")
+	writeString(&builder, fmt.Sprintf("成功模型数：%d\n", successCount))
+	writeString(&builder, fmt.Sprintf("失败模型数：%d\n\n", failCount))
 
 	for _, result := range results {
 		writeString(&builder, "【模型】")
@@ -960,7 +1017,13 @@ func buildJudgeInput(originalPrompt string, results []ModelResult) string {
 		writeString(&builder, "\n\n")
 	}
 
-	writeString(&builder, "请基于以上结果给出最终评审结论。")
+	writeString(&builder, "请严格按以下标题输出，不要遗漏：\n")
+	writeString(&builder, "一、最终结论\n")
+	writeString(&builder, "二、模型对比\n")
+	writeString(&builder, "三、最佳模型\n")
+	writeString(&builder, "四、采用建议\n")
+	writeString(&builder, "五、置信度\n")
+
 	return builder.String()
 }
 
@@ -978,7 +1041,7 @@ func resolveJudgeModel(localModels []string, cfg Config) string {
 	if len(localModels) > 0 {
 		return localModels[0]
 	}
-	return "gemini-2.5-pro"
+	return "gemini-flash-latest"
 }
 
 func resolveModels(baseURL string, cfg Config) ([]string, error) {
@@ -1361,19 +1424,4 @@ func judgeResultProvider(cfg Config, judgeModel string, localModels []string) st
 		return cfg.JudgeProvider
 	}
 	return "unknown"
-}
-
-func resolveInstalledModelsSafe(baseURL string) []string {
-	models, err := fetchInstalledModels(baseURL)
-	if err != nil {
-		return nil
-	}
-	return models
-}
-
-func applyModelSelectionRulesMust(models []string, cfg Config) []string {
-	if len(models) == 0 {
-		return nil
-	}
-	return applyModelSelectionRules(models, cfg)
 }
