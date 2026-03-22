@@ -155,7 +155,7 @@ var appConfig = Config{
 	JudgeProvider: "gemini",
 
 	ModelFilter: []string{"qwen", "llama", "gemma", "glm"},
-	ModelSkip:   []string{"embed", "embedding", "bge", "rerank", "reranker", "llava", "vision", "vl", "32b", "72b"},
+	ModelSkip:   []string{"embed", "embedding", "bge", "rerank", "reranker", "llava", "vision", "vl", "32b", "72b", "coder", "9b", "27b"},
 	ModelLimit:  10,
 
 	LocalCallTimeout:       10 * time.Minute,
