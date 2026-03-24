@@ -53,8 +53,8 @@ var appConfig = Config{
 	SystemPrompt: "你现在是我的私人能量管理系统。请严格按照我的原局（庚午、癸未、辛卯、戊戌）与今日干支进行推演，输出：核心引动、能量体感预测、今日策略（宜/忌）。",
 	JudgePrompt:  "你是一个严谨的最终结论整合助手。请先横向比较，再生成一份可直接采用的最终答案，并输出今日运势评分。",
 
-	SystemPromptFile: "bin/prompts/system_prompt.txt",
-	JudgePromptFile:  "bin/prompts/judge_prompt.txt",
+	SystemPromptFile: "prompts/system_prompt.txt",
+	JudgePromptFile:  "prompts/judge_prompt.txt",
 
 	JudgeEnabled:  true,
 	JudgeModel:    "gemini-flash-latest",
@@ -84,7 +84,7 @@ var appConfig = Config{
 			Name:       "gemini-flash-latest",
 			Provider:   "gemini",
 			APIKey:     "",
-			APIKeyFile: "bin/secrets/gemini_api_key.txt",
+			APIKeyFile: "secrets/gemini_api_key.txt",
 		},
 	},
 }
