@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -50,8 +51,8 @@ type Config struct {
 var appConfig = Config{
 	BaseURL: "http://localhost:11434",
 
-	SystemPrompt: "你现在是我的私人能量管理系统。请严格按照我的原局（庚午、癸未、辛卯、戊戌）与今日干支进行推演，输出：核心引动、能量体感预测、今日策略（宜/忌）。",
-	JudgePrompt:  "你是一个严谨的最终结论整合助手。请先横向比较，再生成一份可直接采用的最终答案，并输出今日运势评分。",
+	SystemPrompt: "你现在是我的私人能量管理系统。请严格按照我的原局进行推演。",
+	JudgePrompt:  "你是一个严谨的最终结论整合助手。",
 
 	SystemPromptFile: "prompts/system_prompt.txt",
 	JudgePromptFile:  "prompts/judge_prompt.txt",
@@ -60,8 +61,8 @@ var appConfig = Config{
 	JudgeModel:    "gemini-flash-latest",
 	JudgeProvider: "gemini",
 
-	ModelFilter: []string{"qwen", "gemma", "glm", "deepseek"},
-	ModelSkip:   []string{"embed", "embedding", "bge", "rerank", "reranker", "llava", "vision", "vl", "32b", "72b", "coder", "9b", "27b"},
+	ModelFilter: []string{"qwen", "gemma", "glm"},
+	ModelSkip:   []string{"embed", "embedding", "bge", "rerank", "reranker", "vision", "vl", "llava", "coder"},
 	ModelLimit:  10,
 
 	LocalCallTimeout:       10 * time.Minute,
@@ -73,7 +74,7 @@ var appConfig = Config{
 	CloudSwitchDelay:       1 * time.Second,
 	RunningPollInterval:    700 * time.Millisecond,
 	StartupCleanupEnabled:  false,
-	ContinueOnCleanupError: false,
+	ContinueOnCleanupError: true,
 
 	LocalReleaseRetryCount: 3,
 	LocalReleaseRetryDelay: 2 * time.Second,
@@ -90,77 +91,49 @@ var appConfig = Config{
 }
 
 func loadRuntimeResources(cfg *Config) error {
-	systemPrompt, err := loadPromptWithFallback(cfg.SystemPromptFile, cfg.SystemPrompt)
-	if err != nil {
-		return fmt.Errorf("加载 system prompt 失败: %w", err)
-	}
-	judgePrompt, err := loadPromptWithFallback(cfg.JudgePromptFile, cfg.JudgePrompt)
-	if err != nil {
-		return fmt.Errorf("加载 judge prompt 失败: %w", err)
-	}
+	systemPrompt, _ := loadPromptWithFallback(cfg.SystemPromptFile, cfg.SystemPrompt)
+	judgePrompt, _ := loadPromptWithFallback(cfg.JudgePromptFile, cfg.JudgePrompt)
 	cfg.SystemPrompt = systemPrompt
 	cfg.JudgePrompt = judgePrompt
 
 	for i := range cfg.CloudModels {
 		key, err := loadAPIKeyWithFallback(cfg.CloudModels[i].APIKeyFile, cfg.CloudModels[i].APIKey)
 		if err != nil {
-			return fmt.Errorf("加载云端模型 API Key 失败(%s): %w", cfg.CloudModels[i].Name, err)
+			fmt.Printf("警告：API Key 加载失败 (%s): %v\n", cfg.CloudModels[i].Name, err)
 		}
 		cfg.CloudModels[i].APIKey = key
 	}
-
 	return nil
 }
 
 func loadPromptWithFallback(filePath string, fallback string) (string, error) {
-	path := strings.TrimSpace(filePath)
-	if path == "" {
-		if strings.TrimSpace(fallback) == "" {
-			return "", fmt.Errorf("prompt 文件路径为空且默认 prompt 为空")
-		}
-		return strings.TrimSpace(fallback), nil
-	}
-
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
-		if strings.TrimSpace(fallback) == "" {
-			return "", fmt.Errorf("读取文件失败: %w", err)
-		}
-		fmt.Printf("提示：读取 prompt 文件失败，改用内置默认内容 (%s): %v\n", path, err)
+		abs, _ := filepath.Abs(filePath)
+		fmt.Printf("提示：未找到 Prompt 文件，使用内置默认值。路径: %s\n", abs)
 		return strings.TrimSpace(fallback), nil
 	}
-
-	content := strings.TrimSpace(string(data))
-	if content == "" {
-		if strings.TrimSpace(fallback) == "" {
-			return "", fmt.Errorf("prompt 文件内容为空: %s", path)
-		}
-		fmt.Printf("提示：prompt 文件为空，改用内置默认内容 (%s)\n", path)
-		return strings.TrimSpace(fallback), nil
-	}
-
-	fmt.Printf("已加载 Prompt 文件: %s\n", path)
-	return content, nil
+	fmt.Printf("已加载 Prompt 文件: %s\n", filePath)
+	return strings.TrimSpace(string(data)), nil
 }
 
 func loadAPIKeyWithFallback(filePath string, fallback string) (string, error) {
-	path := strings.TrimSpace(filePath)
-	if path != "" {
-		data, err := os.ReadFile(path)
-		if err == nil {
-			key := strings.TrimSpace(string(data))
-			if key != "" && !strings.Contains(key, "<") && key != "YOUR_GEMINI_API_KEY" {
-				fmt.Printf("已加载 API Key 文件: %s\n", path)
-				return key, nil
-			}
-		} else {
-			fmt.Printf("提示：读取 API Key 文件失败 (%s): %v\n", path, err)
-		}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		abs, _ := filepath.Abs(filePath)
+		return "", fmt.Errorf("无法读取 API Key 文件，绝对路径: %s, 错误: %v", abs, err)
 	}
 
-	key := strings.TrimSpace(fallback)
-	if key == "" || strings.Contains(key, "<") || key == "YOUR_GEMINI_API_KEY" {
-		return "", fmt.Errorf("未读取到有效 API Key")
+	key := strings.TrimSpace(string(data))
+	if key == "" || key == "YOUR_GEMINI_API_KEY" {
+		return "", fmt.Errorf("API Key 文件内容为空或仍为占位符")
 	}
+
+	// 脱敏打印
+	displayKey := "****"
+	if len(key) > 6 {
+		displayKey = key[:6] + "..."
+	}
+	fmt.Printf("已成功加载 API Key: %s (前缀: %s, 长度: %d)\n", filePath, displayKey, len(key))
 	return key, nil
 }

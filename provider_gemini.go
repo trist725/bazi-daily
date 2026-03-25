@@ -21,8 +21,10 @@ func chatWithCloudModel(cloud CloudModelConfig, systemPrompt, userPrompt string,
 
 func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, timeout time.Duration) (string, error) {
 	apiKey := strings.TrimSpace(cloud.APIKey)
-	if apiKey == "" || strings.Contains(apiKey, "<") || apiKey == "YOUR_GEMINI_API_KEY" {
-		return "", fmt.Errorf("Gemini API Key 未配置，请检查 API Key 文件")
+	
+	// 如果 Key 为空或看起来像占位符，才报错
+	if apiKey == "" || apiKey == "YOUR_GEMINI_API_KEY" {
+		return "", fmt.Errorf("Gemini API Key 未正确读取（内容为空或为默认占位符）")
 	}
 
 	url := fmt.Sprintf(
@@ -56,7 +58,7 @@ func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, tim
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("Gemini 请求失败: %w", err)
+		return "", fmt.Errorf("Gemini 网络请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -66,7 +68,7 @@ func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, tim
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Gemini 返回异常状态 %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("Gemini API 返回状态码 %d: %s", resp.StatusCode, string(body))
 	}
 
 	var geminiResp GeminiGenerateResponse
@@ -79,12 +81,9 @@ func chatWithGemini(cloud CloudModelConfig, systemPrompt, userPrompt string, tim
 	}
 
 	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("Gemini 未返回有效内容，原始响应: %s", string(body))
+		return "", fmt.Errorf("Gemini 未返回有效内容")
 	}
 
 	content := strings.TrimSpace(geminiResp.Candidates[0].Content.Parts[0].Text)
-	if content == "" {
-		return "", fmt.Errorf("Gemini 返回内容为空")
-	}
 	return content, nil
 }
