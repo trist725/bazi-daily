@@ -5,6 +5,8 @@ import (
 	"html/template"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -112,7 +114,7 @@ type HTMLData struct {
 }
 
 func createReportDir(t time.Time) (string, error) {
-	reportDir := filepath.Join("reports", t.Format("2006-01-02_15-04-05"))
+	reportDir := filepath.Join("reports", t.Format("2006-01-02"))
 	if err := os.MkdirAll(reportDir, 0755); err != nil {
 		return "", err
 	}
@@ -122,6 +124,50 @@ func createReportDir(t time.Time) (string, error) {
 func saveRunMeta(reportDir string, t time.Time, prompt string) error {
 	content := fmt.Sprintf("# 运行信息\n\n- 启动时间：`%s`\n- 请求内容：`%s`\n", t.Format("2006-01-02 15:04:05"), prompt)
 	return os.WriteFile(filepath.Join(reportDir, "run.md"), []byte(content), 0644)
+}
+
+func findExistingModelResultToday(modelName string) (*ModelResult, bool) {
+	todayDir := filepath.Join("reports", time.Now().Format("2006-01-02"))
+	sanitizedName := sanitizeFileName(modelName)
+	path := filepath.Join(todayDir, sanitizedName+".md")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+
+	content := string(data)
+	// 检查报告是否成功
+	if strings.Contains(content, "状态：失败") {
+		return nil, false
+	}
+
+	res := &ModelResult{
+		Model:    modelName,
+		Provider: "existing-report", // 标记为已有报告
+	}
+
+	// 提取耗时
+	if idx := strings.Index(content, "- 耗时：`") ; idx != -1 {
+		start := idx + len("- 耗时：`")
+		if end := strings.Index(content[start:], "`"); end != -1 {
+			dStr := content[start : start+end]
+			d, _ := time.ParseDuration(dStr)
+			res.CallDuration = d
+			res.TotalDuration = d
+		}
+	}
+
+	// 提取正文
+	if idx := strings.Index(content, "## 输出内容\n\n"); idx != -1 {
+		res.Content = strings.TrimSpace(content[idx+len("## 输出内容\n\n"):])
+	}
+
+	if res.Content != "" {
+		return res, true
+	}
+
+	return nil, false
 }
 
 func saveSingleModelReport(reportDir string, t time.Time, result ModelResult) error {
@@ -196,23 +242,57 @@ func saveFinalConclusionHTML(reportDir string, t time.Time, prompt string, resul
 	return path, nil
 }
 
-// 辅助提取函数（保留原逻辑并微调）
+// 辅助提取函数
 func extractFortuneScore(jr JudgeResult) (string, string) {
 	if jr.Err != nil || jr.Content == "" {
 		return "暂无评分", "无法提取评分"
 	}
 	lines := strings.Split(jr.Content, "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "/10") {
-			return strings.TrimSpace(line), "根据模型输出自动提取"
+	score := "未识别"
+	reason := "未找到格式化的点评"
+
+	scoreRegex := regexp.MustCompile(`([0-9.]+)\s*/\s*10`)
+	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|点评)[：:]\s*(.*)`)
+
+	for i, line := range lines {
+		if scoreRegex.MatchString(line) {
+			matches := scoreRegex.FindStringSubmatch(line)
+			if len(matches) > 1 {
+				score = matches[1] + " / 10"
+			} else {
+				score = strings.TrimSpace(line)
+			}
+
+			// 尝试寻找点评（通常在评分后面几行）
+			for j := i; j < len(lines) && j < i+5; j++ {
+				l := strings.TrimSpace(lines[j])
+				if reasonRegex.MatchString(l) {
+					rm := reasonRegex.FindStringSubmatch(l)
+					reason = strings.Trim(rm[1], "*_ >")
+					break
+				}
+			}
+			return score, reason
 		}
 	}
-	return "未识别", "未找到格式化的评分"
+	return score, reason
 }
 
 func fortuneScoreClass(score string) string {
-	if strings.Contains(score, "8") || strings.Contains(score, "9") || strings.Contains(score, "10") {
+	valStr := strings.Split(score, "/")[0]
+	valStr = strings.TrimSpace(valStr)
+	val, err := strconv.ParseFloat(valStr, 64)
+	if err != nil {
+		if strings.Contains(score, "8") || strings.Contains(score, "9") || strings.Contains(score, "10") {
+			return "score-good"
+		}
+		return "score-mid"
+	}
+
+	if val >= 8.0 {
 		return "score-good"
+	} else if val <= 4.0 {
+		return "score-low"
 	}
 	return "score-mid"
 }
@@ -225,5 +305,30 @@ func extractFinalConclusionSummary(content string) string {
 }
 
 func buildFinalContentWithoutScore(content string) string {
-	return content
+	lines := strings.Split(content, "\n")
+	var result []string
+	skip := false
+	
+	scoreRegex := regexp.MustCompile(`[0-9.]+\s*/\s*10`)
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// 如果发现评分标记行，开始跳过后续关联行
+		if scoreRegex.MatchString(line) || strings.Contains(trimmed, "审计评分") || strings.Contains(trimmed, "最终评分") {
+			skip = true
+			continue
+		}
+		
+		// 如果在跳过状态，且发现新的一级或二级标题，或者看起来像正文的行，停止跳过
+		if skip {
+			if strings.HasPrefix(trimmed, "#") || (len(trimmed) > 0 && !strings.HasPrefix(trimmed, ">") && !strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "*")) {
+				skip = false
+			} else {
+				continue
+			}
+		}
+		
+		result = append(result, line)
+	}
+	return strings.TrimSpace(strings.Join(result, "\n"))
 }

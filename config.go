@@ -58,11 +58,11 @@ var appConfig = Config{
 	JudgePromptFile:  "prompts/judge_prompt.txt",
 
 	JudgeEnabled:  true,
-	JudgeModel:    "gemini-flash-latest",
-	JudgeProvider: "gemini",
+	JudgeModel:    "gemini-cli",
+	JudgeProvider: "local-cli",
 
 	ModelFilter: []string{"qwen", "gemma", "glm"},
-	ModelSkip:   []string{"embed", "embedding", "bge", "rerank", "reranker", "vision", "vl", "llava", "coder"},
+	ModelSkip:   []string{"embed", "embedding", "bge", "rerank", "reranker", "vision", "vl", "llava", "coder", "9b"},
 	ModelLimit:  10,
 
 	LocalCallTimeout:       10 * time.Minute,

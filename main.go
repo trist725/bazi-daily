@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -13,6 +14,10 @@ import (
 )
 
 func main() {
+	// 1. 设置全局时区为北京时间
+	beijingLoc := time.FixedZone("CST", 8*3600)
+	time.Local = beijingLoc
+
 	if err := loadRuntimeResources(&appConfig); err != nil {
 		fmt.Printf("加载配置资源失败: %v\n", err)
 		return
@@ -30,7 +35,15 @@ func main() {
 	startedAt := time.Now()
 	promptContent := buildPrompt(startedAt)
 
-	// 确保报告目录在项目根目录
+	// 如果今日报告已生成，直接打开并退出
+	baseReportDir := filepath.Join("reports", startedAt.Format("2006-01-02"))
+	existingFinalPath := filepath.Join(baseReportDir, "final.html")
+	if _, err := os.Stat(existingFinalPath); err == nil {
+		fmt.Printf("今日报告已存在: %s，直接打开。\n", existingFinalPath)
+		_ = openInDefaultBrowser(existingFinalPath)
+		return
+	}
+
 	reportDir, err := createReportDir(startedAt)
 	if err != nil {
 		fmt.Printf("创建报告目录失败: %v\n", err)
@@ -57,6 +70,17 @@ func main() {
 			wg.Add(1)
 			go func(c CloudModelConfig) {
 				defer wg.Done()
+
+				// 检测是否已有成功报告
+				if res, ok := findExistingModelResultToday(c.Name); ok {
+					fmt.Printf("[云端] %s 发现今日已有成功报告，跳过调用。\n", c.Name)
+					mu.Lock()
+					results = append(results, *res)
+					mu.Unlock()
+					_ = saveSingleModelReport(reportDir, startedAt, *res)
+					return
+				}
+
 				start := time.Now()
 				content, err := chatWithCloudModel(c, appConfig.SystemPrompt, promptContent, appConfig.CloudCallTimeout)
 				res := ModelResult{
@@ -71,7 +95,7 @@ func main() {
 				results = append(results, res)
 				mu.Unlock()
 				_ = saveSingleModelReport(reportDir, startedAt, res)
-				
+
 				if err != nil {
 					fmt.Printf("[云端] %s 调用失败: %v\n", c.Name, err)
 				} else {
@@ -88,8 +112,19 @@ func main() {
 		fmt.Println(">>> 正在串行调用本地模型...")
 		for i, mName := range localModels {
 			fmt.Printf("[%d/%d] 本地模型: %s\n", i+1, len(localModels), mName)
+
+			// 检测是否已有成功报告
+			if res, ok := findExistingModelResultToday(mName); ok {
+				fmt.Printf("[%d/%d] 模型 %s 发现今日已有成功报告，跳过调用。\n", i+1, len(localModels), mName)
+				mu.Lock()
+				results = append(results, *res)
+				mu.Unlock()
+				_ = saveSingleModelReport(reportDir, startedAt, *res)
+				continue
+			}
+
 			_ = ensureNoModelsRunning(appConfig.BaseURL, appConfig.LocalPreflightTimeout, appConfig.RunningPollInterval)
-			
+
 			start := time.Now()
 			content, cost, err := chatWithOllamaWithRetry(
 				appConfig.BaseURL, mName, appConfig.SystemPrompt, promptContent,
@@ -103,21 +138,21 @@ func main() {
 				CallDuration:  cost,
 				TotalDuration: time.Since(start),
 			}
-			
+
 			mu.Lock()
 			results = append(results, res)
 			mu.Unlock()
-			
+
 			_ = saveSingleModelReport(reportDir, startedAt, res)
-			
+
 			if err != nil {
 				fmt.Printf("[%d/%d] 模型 %s 调用失败: %v\n", i+1, len(localModels), mName, err)
 			} else {
 				fmt.Printf("[%d/%d] 模型 %s 调用完成，耗时: %s\n", i+1, len(localModels), mName, cost.Round(time.Millisecond))
 			}
-			
+
 			_ = releaseLocalModelWithRetry(appConfig.BaseURL, mName, appConfig.LocalUnloadTimeout, appConfig.RunningPollInterval, appConfig.LocalReleaseRetryCount, appConfig.LocalReleaseRetryDelay)
-			
+
 			if i < len(localModels)-1 {
 				time.Sleep(appConfig.LocalSwitchDelay)
 			}
@@ -125,7 +160,37 @@ func main() {
 		fmt.Println("<<< 本地模型阶段结束。")
 	}
 
-	// 3. 裁判整合
+	// 3. 调用本地 Gemini CLI 参与推演
+	fmt.Println(">>> 正在调用本地 Gemini CLI 参与推演...")
+
+	var cliRes ModelResult
+	if res, ok := findExistingModelResultToday("Local-Gemini-CLI"); ok {
+		fmt.Printf("[CLI] 发现今日已有成功报告，跳过调用。\n")
+		cliRes = *res
+	} else {
+		cliStart := time.Now()
+		cliContent, cliErr := chatWithLocalCLI(appConfig.SystemPrompt, promptContent, appConfig.CloudCallTimeout)
+		cliRes = ModelResult{
+			Model:         "Local-Gemini-CLI",
+			Content:       cliContent,
+			Err:           cliErr,
+			Provider:      "local-cli",
+			CallDuration:  time.Since(cliStart),
+			TotalDuration: time.Since(cliStart),
+		}
+	}
+
+	mu.Lock()
+	results = append(results, cliRes)
+	mu.Unlock()
+	_ = saveSingleModelReport(reportDir, startedAt, cliRes)
+	if cliRes.Err != nil {
+		fmt.Printf("[CLI] 调用失败: %v\n", cliRes.Err)
+	} else if cliRes.Provider != "existing-report" {
+		fmt.Printf("[CLI] 调用成功，耗时: %s\n", cliRes.CallDuration.Round(time.Millisecond))
+	}
+
+	// 4. 裁判整合
 	var judgeResult JudgeResult
 	successCount := 0
 	for _, r := range results {
@@ -147,7 +212,7 @@ func main() {
 			CallDuration: time.Since(start),
 		}
 		_ = saveJudgeReport(reportDir, startedAt, judgeResult)
-		
+
 		if err != nil {
 			fmt.Printf("<<< 裁判整合失败: %v\n", err)
 		} else {
@@ -203,9 +268,18 @@ func judgeModelResults(cfg Config, localModels []string, judgeModel, originalPro
 	sb.WriteString("请根据以上内容生成最终结论。")
 
 	input := sb.String()
+
+	// 1. 如果指定了使用本地 CLI
+	if strings.EqualFold(cfg.JudgeProvider, "local-cli") {
+		return chatWithLocalCLI(cfg.JudgePrompt, input, cfg.CloudCallTimeout)
+	}
+
+	// 2. 如果指定了云端模型
 	if cloud, ok := findCloudModelConfig(judgeModel, cfg.CloudModels); ok {
 		return chatWithCloudModel(cloud, cfg.JudgePrompt, input, cfg.CloudCallTimeout)
 	}
+
+	// 3. 否则降级使用本地 Ollama
 	return chatWithOllama(cfg.BaseURL, judgeModel, cfg.JudgePrompt, input, cfg.LocalCallTimeout)
 }
 
