@@ -350,6 +350,42 @@ type HTMLData struct {
 	FinalContent  string
 }
 
+const subReportTemplate = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} - {{.Model}}</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+body { font-family: -apple-system, sans-serif; background: #f8fafc; color: #334155; padding: 20px; line-height: 1.6; }
+.card { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); max-width: 900px; margin: 0 auto; border: 1px solid #e2e8f0; }
+h1 { font-size: 20px; color: #0f172a; margin-top: 0; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
+.meta { font-size: 14px; color: #64748b; margin-bottom: 20px; background: #f1f5f9; padding: 12px; border-radius: 8px; }
+.markdown-body { font-size: 15px; }
+.markdown-body h2 { font-size: 18px; color: #1e293b; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; }
+</style>
+</head>
+<body>
+<div class="card">
+    <h1>{{.Title}}</h1>
+    <div class="meta">
+        <div><strong>模型：</strong>{{.Model}}</div>
+        <div><strong>耗时：</strong>{{.Duration}}</div>
+        {{if .Error}}<div style="color: #ef4444;"><strong>错误：</strong>{{.Error}}</div>{{end}}
+    </div>
+    <div id="content" class="markdown-body"></div>
+</div>
+<div id="raw" style="display:none;">{{.Content}}</div>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const raw = document.getElementById('raw').textContent;
+        document.getElementById('content').innerHTML = marked.parse(raw);
+    });
+</script>
+</body>
+</html>`
+
 func createReportDir(t time.Time) (string, error) {
 	reportDir := filepath.Join("reports", t.Format("2006-01-02"))
 	if err := os.MkdirAll(reportDir, 0755); err != nil {
@@ -366,7 +402,7 @@ func saveRunMeta(reportDir string, t time.Time, prompt string) error {
 func findExistingModelResultToday(t time.Time, modelName string) (*ModelResult, bool) {
 	todayDir := filepath.Join("reports", t.Format("2006-01-02"))
 	sanitizedName := sanitizeFileName(modelName)
-	path := filepath.Join(todayDir, sanitizedName+".md")
+	path := filepath.Join(todayDir, sanitizedName+".html")
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -374,30 +410,36 @@ func findExistingModelResultToday(t time.Time, modelName string) (*ModelResult, 
 	}
 
 	content := string(data)
-	// 检查报告是否成功
-	if strings.Contains(content, "状态：失败") {
+	// 解析 HTML 中的原始 Markdown
+	startTag := `<div id="raw" style="display:none;">`
+	endTag := `</div>`
+
+	startIdx := strings.Index(content, startTag)
+	if startIdx == -1 {
+		return nil, false
+	}
+	startIdx += len(startTag)
+	endIdx := strings.Index(content[startIdx:], endTag)
+	if endIdx == -1 {
 		return nil, false
 	}
 
 	res := &ModelResult{
 		Model:    modelName,
-		Provider: "existing-report", // 标记为已有报告
+		Provider: "existing-report",
+		Content:  strings.TrimSpace(content[startIdx : startIdx+endIdx]),
 	}
 
-	// 提取耗时
-	if idx := strings.Index(content, "- 耗时：`"); idx != -1 {
-		start := idx + len("- 耗时：`")
-		if end := strings.Index(content[start:], "`"); end != -1 {
-			dStr := content[start : start+end]
+	// 提取耗时（从元数据中提取）
+	metaStart := strings.Index(content, "<strong>耗时：</strong>")
+	if metaStart != -1 {
+		metaStart += len("<strong>耗时：</strong>")
+		metaEnd := strings.Index(content[metaStart:], "</div>")
+		if metaEnd != -1 {
+			dStr := strings.TrimSpace(content[metaStart : metaStart+metaEnd])
 			d, _ := time.ParseDuration(dStr)
 			res.CallDuration = d
-			res.TotalDuration = d
 		}
-	}
-
-	// 提取正文
-	if idx := strings.Index(content, "## 输出内容\n\n"); idx != -1 {
-		res.Content = strings.TrimSpace(content[idx+len("## 输出内容\n\n"):])
 	}
 
 	if res.Content != "" {
@@ -408,35 +450,84 @@ func findExistingModelResultToday(t time.Time, modelName string) (*ModelResult, 
 }
 
 func saveSingleModelReport(reportDir string, t time.Time, result ModelResult) error {
-	filename := sanitizeFileName(result.Model) + ".md"
-	var content string
-	if result.Err != nil {
-		content = fmt.Sprintf("# 模型报告\n\n- 模型：`%s`\n- 状态：失败\n- 错误：`%v`\n", result.Model, result.Err)
-	} else {
-		content = fmt.Sprintf("# 模型报告\n\n- 模型：`%s`\n- 耗时：`%s`\n\n## 输出内容\n\n%s\n", result.Model, result.CallDuration, result.Content)
+	filename := sanitizeFileName(result.Model) + ".html"
+	tmpl, _ := template.New("sub").Parse(subReportTemplate)
+
+	data := struct {
+		Title    string
+		Model    string
+		Duration string
+		Error    string
+		Content  string
+	}{
+		Title:    "模型输出报告",
+		Model:    result.Model,
+		Duration: result.CallDuration.Round(time.Millisecond).String(),
+		Content:  result.Content,
 	}
-	return os.WriteFile(filepath.Join(reportDir, filename), []byte(content), 0644)
+	if result.Err != nil {
+		data.Error = result.Err.Error()
+	}
+
+	f, _ := os.Create(filepath.Join(reportDir, filename))
+	defer f.Close()
+	return tmpl.Execute(f, data)
 }
 
 func saveJudgeReport(reportDir string, t time.Time, judgeResult JudgeResult) error {
-	content := fmt.Sprintf("# 裁判报告\n\n- 模型：`%s`\n- 耗时：`%s`\n\n## 结论\n\n%s\n", judgeResult.Model, judgeResult.CallDuration, judgeResult.Content)
-	return os.WriteFile(filepath.Join(reportDir, "judge.md"), []byte(content), 0644)
+	tmpl, _ := template.New("sub").Parse(subReportTemplate)
+	data := struct {
+		Title    string
+		Model    string
+		Duration string
+		Error    string
+		Content  string
+	}{
+		Title:    "裁判决策报告",
+		Model:    judgeResult.Model,
+		Duration: judgeResult.CallDuration.Round(time.Millisecond).String(),
+		Content:  judgeResult.Content,
+	}
+	if judgeResult.Err != nil {
+		data.Error = judgeResult.Err.Error()
+	}
+
+	f, _ := os.Create(filepath.Join(reportDir, "judge.html"))
+	defer f.Close()
+	return tmpl.Execute(f, data)
 }
 
 func saveSummaryReport(reportDir string, t time.Time, prompt string, results []ModelResult, judgeResult JudgeResult, totalDuration time.Duration) error {
 	var sb strings.Builder
 	sb.WriteString("# 多模型汇总报告\n\n")
-	sb.WriteString(fmt.Sprintf("- 时间：%s\n- 总耗时：%s\n\n", t.Format("2006-01-02 15:04:05"), totalDuration))
+	sb.WriteString(fmt.Sprintf("- 时间：%s\n- 总耗时：%s\n\n", t.Format("2006-01-02 15:04:05"), totalDuration.Round(time.Millisecond)))
 
 	for _, r := range results {
 		sb.WriteString(fmt.Sprintf("## 模型：%s\n", r.Model))
 		if r.Err != nil {
 			sb.WriteString(fmt.Sprintf("- 错误：%v\n\n", r.Err))
 		} else {
-			sb.WriteString(fmt.Sprintf("- 耗时：%s\n\n%s\n\n", r.CallDuration, r.Content))
+			sb.WriteString(fmt.Sprintf("- 耗时：%s\n\n%s\n\n", r.CallDuration.Round(time.Millisecond), r.Content))
 		}
 	}
-	return os.WriteFile(filepath.Join(reportDir, "summary.md"), []byte(sb.String()), 0644)
+
+	tmpl, _ := template.New("sub").Parse(subReportTemplate)
+	data := struct {
+		Title    string
+		Model    string
+		Duration string
+		Error    string
+		Content  string
+	}{
+		Title:    "汇总摘要报告",
+		Model:    "System Orchestrator",
+		Duration: totalDuration.Round(time.Millisecond).String(),
+		Content:  sb.String(),
+	}
+
+	f, _ := os.Create(filepath.Join(reportDir, "summary.html"))
+	defer f.Close()
+	return tmpl.Execute(f, data)
 }
 
 func saveFinalConclusionHTML(reportDir string, t time.Time, prompt string, results []ModelResult, judgeResult JudgeResult, totalDuration time.Duration) (string, error) {
