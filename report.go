@@ -16,88 +16,325 @@ const htmlTemplate = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>最终结论</title>
+<title>能量管理最终结论</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
-body{font-family:"Microsoft YaHei","PingFang SC",Arial,sans-serif;background:#f5f7fb;color:#1f2937;margin:0;padding:24px;}
-.container{max-width:980px;margin:0 auto;}
-.card{background:#fff;border-radius:16px;padding:24px;box-shadow:0 8px 30px rgba(0,0,0,.08);margin-bottom:20px;}
-h1{margin:0 0 16px 0;font-size:32px;}
-h2{margin:0 0 14px 0;font-size:22px;color:#111827;}
-.meta{line-height:1.9;font-size:15px;color:#4b5563;}
-.highlight{background:linear-gradient(135deg,#fff7ed,#fffbeb);border:1px solid #fdba74;}
-.summary-card{background:linear-gradient(135deg,#faf5ff,#eef2ff);border:1px solid #c4b5fd;}
-.summary-text{white-space:pre-wrap;word-break:break-word;line-height:1.9;font-size:16px;color:#312e81;font-weight:600;}
-.score-card{text-align:center;}
-.score-good{background:linear-gradient(135deg,#ecfdf5,#dcfce7);border:1px solid #86efac;}
-.score-good .score-label{color:#15803d;}
-.score-good .score-value{color:#166534;}
-.score-mid{background:linear-gradient(135deg,#fffbeb,#fef3c7);border:1px solid #fcd34d;}
-.score-mid .score-label{color:#b45309;}
-.score-mid .score-value{color:#92400e;}
-.score-low{background:linear-gradient(135deg,#fef2f2,#fee2e2);border:1px solid #fca5a5;}
-.score-low .score-label{color:#b91c1c;}
-.score-low .score-value{color:#991b1b;}
-.score-unknown{background:linear-gradient(135deg,#eff6ff,#e0e7ff);border:1px solid #93c5fd;}
-.score-unknown .score-label{color:#1d4ed8;}
-.score-unknown .score-value{color:#1e3a8a;}
-.score-label{font-size:16px;margin-bottom:10px;font-weight:700;}
-.score-value{font-size:48px;line-height:1.2;font-weight:800;margin-bottom:10px;}
-.score-reason{font-size:14px;line-height:1.8;color:#475569;}
-pre{white-space:pre-wrap;word-break:break-word;background:#0f172a;color:#e5e7eb;padding:18px;border-radius:12px;line-height:1.75;font-size:15px;overflow:auto;}
-ul{margin:0;padding-left:22px;line-height:1.9;}
-.note{color:#6b7280;font-size:14px;line-height:1.8;}
-.badge{display:inline-block;padding:6px 12px;border-radius:999px;background:#dbeafe;color:#1d4ed8;font-size:13px;margin-bottom:12px;}
+:root {
+    --primary: #0f172a;
+    --accent: #3b82f6;
+    --bg: #f1f5f9;
+    --card-bg: #ffffff;
+    --text-main: #334155;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+    --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text-main);
+    margin: 0;
+    padding: 24px 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+}
+
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.card {
+    background: var(--card-bg);
+    border-radius: 16px;
+    padding: 32px;
+    box-shadow: var(--shadow);
+    margin-bottom: 24px;
+    border: 1px solid var(--border);
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+h1 {
+    margin: 0;
+    font-size: 26px;
+    color: var(--primary);
+    font-weight: 800;
+    letter-spacing: -0.025em;
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 12px;
+    border-radius: 9999px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    font-size: 14px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    padding-top: 20px;
+}
+
+.meta-item strong {
+    color: var(--primary);
+    font-weight: 600;
+}
+
+/* 评分卡片优化 */
+.score-card {
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.2s;
+}
+
+.score-good { background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-color: #86efac; color: #166534; }
+.score-mid { background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-color: #fcd34d; color: #92400e; }
+.score-low { background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border-color: #fca5a5; color: #991b1b; }
+
+.score-label { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.15em; opacity: 0.8; margin-bottom: 12px; }
+.score-value { font-size: 72px; font-weight: 950; line-height: 1; margin: 8px 0; font-variant-numeric: tabular-nums; }
+.score-reason {
+    font-size: 16px;
+    max-width: 600px;
+    margin: 16px auto 0;
+    font-weight: 600;
+    padding: 12px 20px;
+    background: rgba(255,255,255,0.4);
+    border-radius: 12px;
+    backdrop-filter: blur(4px);
+}
+
+/* 结论内容 Markdown 样式 */
+.content-area {
+    position: relative;
+}
+
+.content-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 12px;
+}
+
+h2 { font-size: 20px; margin: 0; color: var(--primary); font-weight: 700; }
+
+.copy-btn {
+    padding: 8px 16px;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-main);
+    cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+.copy-btn:hover { border-color: var(--accent); color: var(--accent); background: #f8fafc; }
+.copy-btn:active { transform: translateY(1px); }
+
+.markdown-body {
+    font-size: 16px;
+    color: #334155;
+    line-height: 1.75;
+}
+
+/* Markdown 元素美化 */
+.markdown-body h1, .markdown-body h2, .markdown-body h3 { 
+    color: var(--primary); 
+    margin-top: 1.5em; 
+    margin-bottom: 0.75em; 
+    font-weight: 700;
+}
+.markdown-body h2 { font-size: 1.25rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.markdown-body h3 { font-size: 1.1rem; }
+.markdown-body p { margin-bottom: 1.25em; }
+.markdown-body strong { color: #0f172a; font-weight: 800; }
+.markdown-body ul, .markdown-body ol { padding-left: 1.5em; margin-bottom: 1.25em; }
+.markdown-body li { margin-bottom: 0.5em; }
+.markdown-body blockquote {
+    margin: 1.5em 0;
+    padding: 0.5em 1.5em;
+    color: #475569;
+    border-left: 4px solid var(--accent);
+    background: #f8fafc;
+    border-radius: 0 8px 8px 0;
+}
+.markdown-body table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5em 0;
+    font-size: 0.95em;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.markdown-body th {
+    background-color: #f8fafc;
+    color: #475569;
+    font-weight: 700;
+    text-align: left;
+    padding: 12px 16px;
+    border-bottom: 2px solid var(--border);
+}
+.markdown-body td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background-color: #ffffff;
+}
+.markdown-body tr:last-child td { border-bottom: none; }
+.markdown-body tr:nth-child(even) td { background-color: #fcfdfe; }
+.markdown-body hr { height: 1px; background-color: var(--border); border: none; margin: 2em 0; }
+.markdown-body code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.9em;
+    background: #f1f5f9;
+    padding: 0.2em 0.4em;
+    border-radius: 4px;
+    color: #e11d48;
+}
+
+.summary-card {
+    background: linear-gradient(to right, #f8fafc, #eff6ff); 
+    border-left: 5px solid #6366f1;
+}
+.summary-title { color: #4338ca; margin-bottom: 10px; font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; display: flex; align-items: center; }
+.summary-title::before { content: ""; display: inline-block; width: 8px; height: 8px; background: #6366f1; border-radius: 50%; margin-right: 8px; box-shadow: 0 0 8px rgba(99,102,241,0.5); }
+.summary-text { font-size: 15px; color: #312e81; font-weight: 500; line-height: 1.7; }
+
+.model-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+.model-badge {
+    background: #f8fafc;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #64748b;
+    border: 1px solid var(--border);
+}
+
+.footer {
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 48px;
+    padding-bottom: 48px;
+}
+
+@media (max-width: 640px) {
+    body { padding: 16px 12px; }
+    .card { padding: 24px 20px; }
+    h1 { font-size: 22px; }
+    .score-value { font-size: 56px; }
+    .header { flex-direction: column; align-items: flex-start; gap: 12px; }
+}
 </style>
 </head>
 <body>
 <div class="container">
-	<div class="card">
-		<div class="badge">自动生成</div>
-		<h1>最终结论</h1>
-		<div class="meta">
-			<div><strong>生成时间：</strong>{{.Time}}</div>
-			<div><strong>问题：</strong>{{.Prompt}}</div>
-			<div><strong>总耗时：</strong>{{.Duration}}</div>
-		</div>
-	</div>
+    <div class="card">
+        <div class="header">
+            <h1>能量管理报告</h1>
+            <div class="badge">AI 推演 v2.1</div>
+        </div>
+        <div class="meta">
+            <div class="meta-item"><strong>目标日期：</strong>{{.Prompt}}</div>
+            <div class="meta-item"><strong>生成时间：</strong>{{.Time}}</div>
+            <div class="meta-item"><strong>推演耗时：</strong>{{.Duration}}</div>
+        </div>
+    </div>
 
-	<div class="card score-card {{.ScoreClass}}">
-		<div class="score-label">今日运势评分</div>
-		<div class="score-value">{{.Score}}</div>
-		<div class="score-reason">{{.ScoreReason}}</div>
-	</div>
+    <div class="card score-card {{.ScoreClass}}">
+        <div class="score-label">今日运势评分</div>
+        <div class="score-value">{{.Score}}</div>
+        {{if .ScoreReason}}
+        <div class="score-reason">“ {{.ScoreReason}} ”</div>
+        {{end}}
+    </div>
 
-	{{if .Summary}}
-	<div class="card summary-card">
-		<h2>结论摘要</h2>
-		<div class="summary-text">{{.Summary}}</div>
-	</div>
-	{{end}}
+    {{if .Summary}}
+    <div class="card summary-card">
+        <div class="summary-title">核心结论摘要</div>
+        <div class="summary-text">{{.Summary}}</div>
+    </div>
+    {{end}}
 
-	<div class="card">
-		<h2>成功返回的模型</h2>
-		<ul>
-		{{range .SuccessModels}}
-			<li>{{.}}</li>
-		{{else}}
-			<li>无</li>
-		{{end}}
-		</ul>
-	</div>
+    <div class="card content-area">
+        <div class="content-header">
+            <h2>最终推演结论</h2>
+            <button class="copy-btn" onclick="copyContent()">一键复制</button>
+        </div>
+        <div id="final-content" class="markdown-body"></div>
+    </div>
 
-	<div class="card highlight">
-		<h2>最终采用结论</h2>
-		<pre>{{.FinalContent}}</pre>
-	</div>
+    <div class="card">
+        <h2 style="font-size: 15px; margin-bottom: 12px; color: var(--text-muted);">参与计算的 AI 模型</h2>
+        <div class="model-list">
+            {{range .SuccessModels}}
+            <span class="model-badge">{{.}}</span>
+            {{else}}
+            <span class="model-badge">无</span>
+            {{end}}
+        </div>
+    </div>
 
-	<div class="card">
-		<h2>查看说明</h2>
-		<div class="note">
-			<div>• 如需查看每个模型的原始输出，请打开同目录下的各模型报告文件。</div>
-			<div>• 如需查看完整横向比较，请打开 <strong>summary.md</strong> 与 <strong>judge.md</strong>。</div>
-		</div>
-	</div>
+    <div class="footer">
+        <div>&bull; 数据基于多模型共识算法自动生成 &bull;</div>
+        <div style="margin-top: 8px; opacity: 0.7;">报告路径：reports/{{.Time}}</div>
+    </div>
 </div>
+
+<!-- 存储原始 Markdown -->
+<div id="markdown-raw" style="display:none;">{{.FinalContent}}</div>
+
+<script>
+// 初始化渲染
+document.addEventListener('DOMContentLoaded', () => {
+    const raw = document.getElementById('markdown-raw').textContent;
+    document.getElementById('final-content').innerHTML = marked.parse(raw);
+});
+
+function copyContent() {
+    const content = document.getElementById('final-content').innerText;
+    navigator.clipboard.writeText(content).then(() => {
+        const btn = document.querySelector('.copy-btn');
+        const originalText = btn.innerText;
+        btn.innerText = '已复制!';
+        btn.style.borderColor = '#22c55e';
+        btn.style.color = '#16a34a';
+        setTimeout(() => {
+            btn.innerText = originalText;
+            btn.style.borderColor = '';
+            btn.style.color = '';
+        }, 2000);
+    });
+}
+</script>
 </body>
 </html>`
 
@@ -126,8 +363,8 @@ func saveRunMeta(reportDir string, t time.Time, prompt string) error {
 	return os.WriteFile(filepath.Join(reportDir, "run.md"), []byte(content), 0644)
 }
 
-func findExistingModelResultToday(modelName string) (*ModelResult, bool) {
-	todayDir := filepath.Join("reports", time.Now().Format("2006-01-02"))
+func findExistingModelResultToday(t time.Time, modelName string) (*ModelResult, bool) {
+	todayDir := filepath.Join("reports", t.Format("2006-01-02"))
 	sanitizedName := sanitizeFileName(modelName)
 	path := filepath.Join(todayDir, sanitizedName+".md")
 
@@ -148,7 +385,7 @@ func findExistingModelResultToday(modelName string) (*ModelResult, bool) {
 	}
 
 	// 提取耗时
-	if idx := strings.Index(content, "- 耗时：`") ; idx != -1 {
+	if idx := strings.Index(content, "- 耗时：`"); idx != -1 {
 		start := idx + len("- 耗时：`")
 		if end := strings.Index(content[start:], "`"); end != -1 {
 			dStr := content[start : start+end]
@@ -217,6 +454,11 @@ func saveFinalConclusionHTML(reportDir string, t time.Time, prompt string, resul
 	}
 
 	score, reason := extractFortuneScore(judgeResult)
+	finalContent := buildFinalContentWithoutScore(judgeResult.Content)
+	if judgeResult.Err != nil {
+		finalContent = fmt.Sprintf("⚠️ **裁判模型整合失败**\n\n- 错误信息: %v\n\n请查看各模型原始输出以获取推演结论。", judgeResult.Err)
+	}
+
 	data := HTMLData{
 		Time:          t.Format("2006-01-02 15:04:05"),
 		Prompt:        prompt,
@@ -226,7 +468,7 @@ func saveFinalConclusionHTML(reportDir string, t time.Time, prompt string, resul
 		ScoreClass:    fortuneScoreClass(score),
 		Summary:       extractFinalConclusionSummary(judgeResult.Content),
 		SuccessModels: successModels,
-		FinalContent:  buildFinalContentWithoutScore(judgeResult.Content),
+		FinalContent:  finalContent,
 	}
 
 	path := filepath.Join(reportDir, "final.html")
@@ -298,37 +540,62 @@ func fortuneScoreClass(score string) string {
 }
 
 func extractFinalConclusionSummary(content string) string {
-	if len(content) > 200 {
-		return content[:200] + "..."
+	if content == "" {
+		return ""
 	}
-	return content
+	// 尝试寻找第一段非标题内容，避免摘要和正文开头完全重复
+	lines := strings.Split(content, "\n")
+	var firstPara string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		firstPara = trimmed
+		break
+	}
+
+	// 简单的正则，去掉 Markdown 符号
+	re := regexp.MustCompile(`[#*` + "`" + `>_-]`)
+	clean := re.ReplaceAllString(firstPara, " ")
+
+	// 合并多余空格
+	reSpace := regexp.MustCompile(`\s+`)
+	clean = strings.TrimSpace(reSpace.ReplaceAllString(clean, " "))
+
+	if len([]rune(clean)) > 140 {
+		return string([]rune(clean)[:140]) + "..."
+	}
+	return clean
 }
 
 func buildFinalContentWithoutScore(content string) string {
+	if content == "" {
+		return "（裁判模型未返回有效推演结论，请检查各模型原始输出）"
+	}
 	lines := strings.Split(content, "\n")
 	var result []string
-	skip := false
-	
+
 	scoreRegex := regexp.MustCompile(`[0-9.]+\s*/\s*10`)
+	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|点评|评分)[：:]`)
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		// 如果发现评分标记行，开始跳过后续关联行
-		if scoreRegex.MatchString(line) || strings.Contains(trimmed, "审计评分") || strings.Contains(trimmed, "最终评分") {
-			skip = true
+		if trimmed == "" {
+			result = append(result, line)
 			continue
 		}
-		
-		// 如果在跳过状态，且发现新的一级或二级标题，或者看起来像正文的行，停止跳过
-		if skip {
-			if strings.HasPrefix(trimmed, "#") || (len(trimmed) > 0 && !strings.HasPrefix(trimmed, ">") && !strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "*")) {
-				skip = false
-			} else {
-				continue
-			}
+		// 过滤评分行及其点评行
+		if scoreRegex.MatchString(line) || reasonRegex.MatchString(trimmed) ||
+			strings.Contains(trimmed, "审计评分") || strings.Contains(trimmed, "最终评分") {
+			continue
 		}
-		
 		result = append(result, line)
 	}
-	return strings.TrimSpace(strings.Join(result, "\n"))
+
+	final := strings.TrimSpace(strings.Join(result, "\n"))
+	if (final == "" || len(final) < 50) && content != "" {
+		return content // 过滤得太干净了就回退，确保有内容显示
+	}
+	return final
 }

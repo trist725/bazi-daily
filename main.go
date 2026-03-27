@@ -23,6 +23,19 @@ func main() {
 		return
 	}
 
+	startedAt := time.Now()
+	// 解析日期参数
+	targetTime := time.Now()
+	if len(os.Args) > 1 {
+		parsedTime, err := time.ParseInLocation("2006-01-02", os.Args[1], beijingLoc)
+		if err == nil {
+			targetTime = parsedTime
+			fmt.Printf(">>> 目标日期设定为: %s\n", targetTime.Format("2006-01-02"))
+		} else {
+			fmt.Printf("警告：日期格式错误 (需为 YYYY-MM-DD)，将使用当前时间。\n")
+		}
+	}
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -32,24 +45,23 @@ func main() {
 		os.Exit(0)
 	}()
 
-	startedAt := time.Now()
-	promptContent := buildPrompt(startedAt)
+	promptContent := buildPrompt(targetTime)
 
-	// 如果今日报告已生成，直接打开并退出
-	baseReportDir := filepath.Join("reports", startedAt.Format("2006-01-02"))
+	// 如果目标日期报告已生成，直接打开并退出
+	baseReportDir := filepath.Join("reports", targetTime.Format("2006-01-02"))
 	existingFinalPath := filepath.Join(baseReportDir, "final.html")
 	if _, err := os.Stat(existingFinalPath); err == nil {
-		fmt.Printf("今日报告已存在: %s，直接打开。\n", existingFinalPath)
+		fmt.Printf("目标日期报告已存在: %s，直接打开。\n", existingFinalPath)
 		_ = openInDefaultBrowser(existingFinalPath)
 		return
 	}
 
-	reportDir, err := createReportDir(startedAt)
+	reportDir, err := createReportDir(targetTime)
 	if err != nil {
 		fmt.Printf("创建报告目录失败: %v\n", err)
 		return
 	}
-	_ = saveRunMeta(reportDir, startedAt, promptContent)
+	_ = saveRunMeta(reportDir, targetTime, promptContent)
 
 	localModels, err := resolveModels(appConfig.BaseURL, appConfig)
 	if err != nil {
@@ -72,12 +84,12 @@ func main() {
 				defer wg.Done()
 
 				// 检测是否已有成功报告
-				if res, ok := findExistingModelResultToday(c.Name); ok {
-					fmt.Printf("[云端] %s 发现今日已有成功报告，跳过调用。\n", c.Name)
+				if res, ok := findExistingModelResultToday(targetTime, c.Name); ok {
+					fmt.Printf("[云端] %s 发现已有成功报告，跳过调用。\n", c.Name)
 					mu.Lock()
 					results = append(results, *res)
 					mu.Unlock()
-					_ = saveSingleModelReport(reportDir, startedAt, *res)
+					_ = saveSingleModelReport(reportDir, targetTime, *res)
 					return
 				}
 
@@ -94,7 +106,7 @@ func main() {
 				mu.Lock()
 				results = append(results, res)
 				mu.Unlock()
-				_ = saveSingleModelReport(reportDir, startedAt, res)
+				_ = saveSingleModelReport(reportDir, targetTime, res)
 
 				if err != nil {
 					fmt.Printf("[云端] %s 调用失败: %v\n", c.Name, err)
@@ -114,12 +126,12 @@ func main() {
 			fmt.Printf("[%d/%d] 本地模型: %s\n", i+1, len(localModels), mName)
 
 			// 检测是否已有成功报告
-			if res, ok := findExistingModelResultToday(mName); ok {
-				fmt.Printf("[%d/%d] 模型 %s 发现今日已有成功报告，跳过调用。\n", i+1, len(localModels), mName)
+			if res, ok := findExistingModelResultToday(targetTime, mName); ok {
+				fmt.Printf("[%d/%d] 模型 %s 发现已有成功报告，跳过调用。\n", i+1, len(localModels), mName)
 				mu.Lock()
 				results = append(results, *res)
 				mu.Unlock()
-				_ = saveSingleModelReport(reportDir, startedAt, *res)
+				_ = saveSingleModelReport(reportDir, targetTime, *res)
 				continue
 			}
 
@@ -143,7 +155,7 @@ func main() {
 			results = append(results, res)
 			mu.Unlock()
 
-			_ = saveSingleModelReport(reportDir, startedAt, res)
+			_ = saveSingleModelReport(reportDir, targetTime, res)
 
 			if err != nil {
 				fmt.Printf("[%d/%d] 模型 %s 调用失败: %v\n", i+1, len(localModels), mName, err)
@@ -164,8 +176,8 @@ func main() {
 	fmt.Println(">>> 正在调用本地 Gemini CLI 参与推演...")
 
 	var cliRes ModelResult
-	if res, ok := findExistingModelResultToday("Local-Gemini-CLI"); ok {
-		fmt.Printf("[CLI] 发现今日已有成功报告，跳过调用。\n")
+	if res, ok := findExistingModelResultToday(targetTime, "Local-Gemini-CLI"); ok {
+		fmt.Printf("[CLI] 发现已有成功报告，跳过调用。\n")
 		cliRes = *res
 	} else {
 		cliStart := time.Now()
@@ -183,7 +195,7 @@ func main() {
 	mu.Lock()
 	results = append(results, cliRes)
 	mu.Unlock()
-	_ = saveSingleModelReport(reportDir, startedAt, cliRes)
+	_ = saveSingleModelReport(reportDir, targetTime, cliRes)
 	if cliRes.Err != nil {
 		fmt.Printf("[CLI] 调用失败: %v\n", cliRes.Err)
 	} else if cliRes.Provider != "existing-report" {
@@ -211,7 +223,7 @@ func main() {
 			Enabled:      true,
 			CallDuration: time.Since(start),
 		}
-		_ = saveJudgeReport(reportDir, startedAt, judgeResult)
+		_ = saveJudgeReport(reportDir, targetTime, judgeResult)
 
 		if err != nil {
 			fmt.Printf("<<< 裁判整合失败: %v\n", err)
@@ -223,10 +235,11 @@ func main() {
 	}
 
 	totalDuration := time.Since(startedAt)
-	_ = saveSummaryReport(reportDir, startedAt, promptContent, results, judgeResult, totalDuration)
-	finalPath, _ := saveFinalConclusionHTML(reportDir, startedAt, promptContent, results, judgeResult, totalDuration)
+	_ = saveSummaryReport(reportDir, targetTime, promptContent, results, judgeResult, totalDuration)
+	finalPath, _ := saveFinalConclusionHTML(reportDir, targetTime, promptContent, results, judgeResult, totalDuration)
 
 	fmt.Printf("\n任务结束！总耗时: %s\n", totalDuration.Round(time.Millisecond))
+
 	if finalPath != "" {
 		fmt.Printf("最终结论报告: %s\n", finalPath)
 		_ = openInDefaultBrowser(finalPath)
@@ -269,17 +282,33 @@ func judgeModelResults(cfg Config, localModels []string, judgeModel, originalPro
 
 	input := sb.String()
 
-	// 1. 如果指定了使用本地 CLI
+	// 1. 尝试使用首选 Provider (本地 CLI)
 	if strings.EqualFold(cfg.JudgeProvider, "local-cli") {
-		return chatWithLocalCLI(cfg.JudgePrompt, input, cfg.CloudCallTimeout)
+		fmt.Printf("[裁判] 尝试使用本地 CLI (%s)...\n", judgeModel)
+		content, err := chatWithLocalCLI(cfg.JudgePrompt, input, cfg.CloudCallTimeout)
+		if err == nil {
+			return content, nil
+		}
+		fmt.Printf("[裁判] 本地 CLI 失败: %v。将尝试 Fallback 到云端模型...\n", err)
 	}
 
-	// 2. 如果指定了云端模型
-	if cloud, ok := findCloudModelConfig(judgeModel, cfg.CloudModels); ok {
-		return chatWithCloudModel(cloud, cfg.JudgePrompt, input, cfg.CloudCallTimeout)
+	// 2. Fallback 或 直接调用云端模型
+	for _, cloud := range cfg.CloudModels {
+		if cloud.Enabled && (cloud.Name == judgeModel || judgeModel == "gemini-flash-latest" || judgeModel == "gemini-cli") {
+			fmt.Printf("[裁判] 正在使用云端模型 Fallback: %s...\n", cloud.Name)
+			return chatWithCloudModel(cloud, cfg.JudgePrompt, input, cfg.CloudCallTimeout)
+		}
 	}
 
-	// 3. 否则降级使用本地 Ollama
+	// 3. 兜底尝试第一个开启的云端模型
+	for _, cloud := range cfg.CloudModels {
+		if cloud.Enabled {
+			fmt.Printf("[裁判] 尝试使用第一个可用的云端模型: %s...\n", cloud.Name)
+			return chatWithCloudModel(cloud, cfg.JudgePrompt, input, cfg.CloudCallTimeout)
+		}
+	}
+
+	// 4. 降级使用本地 Ollama
 	return chatWithOllama(cfg.BaseURL, judgeModel, cfg.JudgePrompt, input, cfg.LocalCallTimeout)
 }
 
