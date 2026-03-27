@@ -491,32 +491,67 @@ func extractFortuneScore(jr JudgeResult) (string, string) {
 	}
 	lines := strings.Split(jr.Content, "\n")
 	score := "未识别"
-	reason := "未找到格式化的点评"
+	reason := ""
 
-	scoreRegex := regexp.MustCompile(`([0-9.]+)\s*/\s*10`)
-	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|点评)[：:]\s*(.*)`)
+	// 评分正则
+	scoreRegexes := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(?:评分|气场评分|综合评分)[：:]\s*([0-9.]+)(?:\s*/\s*10)?`),
+		regexp.MustCompile(`([0-9.]+)\s*/\s*10`),
+	}
 
+	// 理由正则
+	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|气场分析|核心点评|综合点评|运势点评|点评)[：:]\s*(.*)`)
+
+	// 1. 尝试在文中定位评分和紧随其后的点评
 	for i, line := range lines {
-		if scoreRegex.MatchString(line) {
-			matches := scoreRegex.FindStringSubmatch(line)
-			if len(matches) > 1 {
-				score = matches[1] + " / 10"
-			} else {
-				score = strings.TrimSpace(line)
-			}
-
-			// 尝试寻找点评（通常在评分后面几行）
-			for j := i; j < len(lines) && j < i+5; j++ {
-				l := strings.TrimSpace(lines[j])
-				if reasonRegex.MatchString(l) {
-					rm := reasonRegex.FindStringSubmatch(l)
-					reason = strings.Trim(rm[1], "*_ >")
+		foundScore := false
+		for _, reg := range scoreRegexes {
+			if reg.MatchString(line) {
+				matches := reg.FindStringSubmatch(line)
+				if len(matches) > 1 {
+					score = matches[1] + " / 10"
+					foundScore = true
 					break
 				}
 			}
-			return score, reason
+		}
+
+		if foundScore {
+			// 找到评分后，尝试在后面几行寻找点评
+			for j := i; j < len(lines) && j < i+6; j++ {
+				l := strings.TrimSpace(lines[j])
+				if reasonRegex.MatchString(l) {
+					rm := reasonRegex.FindStringSubmatch(l)
+					reason = strings.Trim(rm[1], "*_ >#")
+					break
+				}
+			}
+			if reason != "" {
+				return score, reason
+			}
 		}
 	}
+
+	// 2. 如果没在评分附近找到，尝试在全文中寻找第一个出现的点评标签
+	if reason == "" {
+		for _, line := range lines {
+			if reasonRegex.MatchString(line) {
+				rm := reasonRegex.FindStringSubmatch(line)
+				reason = strings.Trim(rm[1], "*_ >#")
+				break
+			}
+		}
+	}
+
+	// 3. 如果还是没有，使用摘要作为理由（避免显示错误或空值）
+	if reason == "" {
+		reason = extractFinalConclusionSummary(jr.Content)
+	}
+
+	if reason == "" {
+		reason = "建议查看详细推演结论"
+	}
+
 	return score, reason
 }
 
@@ -576,8 +611,8 @@ func buildFinalContentWithoutScore(content string) string {
 	lines := strings.Split(content, "\n")
 	var result []string
 
-	scoreRegex := regexp.MustCompile(`[0-9.]+\s*/\s*10`)
-	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|点评|评分)[：:]`)
+	scoreRegex := regexp.MustCompile(`(?i)(?:评分|气场评分|综合评分)[：:]\s*[0-9.]+|[0-9.]+\s*/\s*10`)
+	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|气场分析|核心点评|综合点评|运势点评|点评)[：:]`)
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -585,9 +620,10 @@ func buildFinalContentWithoutScore(content string) string {
 			result = append(result, line)
 			continue
 		}
-		// 过滤评分行及其点评行
+		// 过滤评分行及其点评行（这些已在卡片中显示）
 		if scoreRegex.MatchString(line) || reasonRegex.MatchString(trimmed) ||
-			strings.Contains(trimmed, "审计评分") || strings.Contains(trimmed, "最终评分") {
+			strings.Contains(trimmed, "审计评分") || strings.Contains(trimmed, "最终评分") ||
+			strings.Contains(trimmed, "气场点评") || strings.Contains(trimmed, "气场分析") {
 			continue
 		}
 		result = append(result, line)
