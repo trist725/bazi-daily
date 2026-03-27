@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -14,6 +16,11 @@ import (
 )
 
 func main() {
+	// 0. 在 Windows 环境下强制设置控制台编码为 UTF-8
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("chcp", "65001").Run()
+	}
+
 	// 1. 设置全局时区为北京时间
 	beijingLoc := time.FixedZone("CST", 8*3600)
 	time.Local = beijingLoc
