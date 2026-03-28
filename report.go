@@ -16,7 +16,7 @@ const htmlTemplate = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>能量管理最终结论</title>
+<title>能量管理最终结�?/title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
 :root {
@@ -246,6 +246,26 @@ h2 { font-size: 20px; margin: 0; color: var(--primary); font-weight: 700; }
     padding-bottom: 48px;
 }
 
+.rationale-card {
+    border-left: 4px solid #10b981;
+    background: #f0fdf4;
+}
+.comparison-card {
+    border-left: 4px solid #f59e0b;
+    background: #fffbeb;
+}
+.section-title {
+    font-size: 14px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+}
+.rationale-title { color: #059669; }
+.comparison-title { color: #d97706; }
+
 @media (max-width: 640px) {
     body { padding: 16px 12px; }
     .card { padding: 24px 20px; }
@@ -263,9 +283,9 @@ h2 { font-size: 20px; margin: 0; color: var(--primary); font-weight: 700; }
             <div class="badge">AI 推演 v2.1</div>
         </div>
         <div class="meta">
-            <div class="meta-item"><strong>目标日期：</strong>{{.Prompt}}</div>
-            <div class="meta-item"><strong>生成时间：</strong>{{.Time}}</div>
-            <div class="meta-item"><strong>推演耗时：</strong>{{.Duration}}</div>
+            <div class="meta-item"><strong>目标日期�?/strong>{{.Prompt}}</div>
+            <div class="meta-item"><strong>生成时间�?/strong>{{.Time}}</div>
+            <div class="meta-item"><strong>推演耗时�?/strong>{{.Duration}}</div>
         </div>
     </div>
 
@@ -273,7 +293,7 @@ h2 { font-size: 20px; margin: 0; color: var(--primary); font-weight: 700; }
         <div class="score-label">今日运势评分</div>
         <div class="score-value">{{.Score}}</div>
         {{if .ScoreReason}}
-        <div class="score-reason">“ {{.ScoreReason}} ”</div>
+        <div class="score-reason">�?{{.ScoreReason}} �?/div>
         {{end}}
     </div>
 
@@ -286,37 +306,62 @@ h2 { font-size: 20px; margin: 0; color: var(--primary); font-weight: 700; }
 
     <div class="card content-area">
         <div class="content-header">
-            <h2>最终推演结论</h2>
-            <button class="copy-btn" onclick="copyContent()">一键复制</button>
+            <h2>最终推演结�?/h2>
+            <button class="copy-btn" onclick="copyContent()">一键复制结�?/button>
         </div>
         <div id="final-content" class="markdown-body"></div>
     </div>
 
+    {{if .Rationale}}
+    <div class="card rationale-card">
+        <div class="section-title rationale-title">💡 决策依据 / 采用逻辑</div>
+        <div id="rationale-content" class="markdown-body" style="font-size: 14px; color: #065f46;"></div>
+    </div>
+    {{end}}
+
+    {{if .Comparison}}
+    <div class="card comparison-card">
+        <div class="section-title comparison-title">📊 各模型对比点�?/div>
+        <div id="comparison-content" class="markdown-body" style="font-size: 14px; color: #92400e;"></div>
+    </div>
+    {{end}}
+
     <div class="card">
-        <h2 style="font-size: 15px; margin-bottom: 12px; color: var(--text-muted);">参与计算的 AI 模型</h2>
+        <h2 style="font-size: 15px; margin-bottom: 12px; color: var(--text-muted);">参与计算�?AI 模型</h2>
         <div class="model-list">
             {{range .SuccessModels}}
             <span class="model-badge">{{.}}</span>
             {{else}}
-            <span class="model-badge">无</span>
+            <span class="model-badge">�?/span>
             {{end}}
         </div>
     </div>
 
     <div class="footer">
-        <div>&bull; 数据基于多模型共识算法自动生成 &bull;</div>
+        <div>&bull; 数据基于多模型共识算法自动生�?&bull;</div>
         <div style="margin-top: 8px; opacity: 0.7;">报告路径：reports/{{.Time}}</div>
     </div>
 </div>
 
 <!-- 存储原始 Markdown -->
 <div id="markdown-raw" style="display:none;">{{.FinalContent}}</div>
+<div id="rationale-raw" style="display:none;">{{.Rationale}}</div>
+<div id="comparison-raw" style="display:none;">{{.Comparison}}</div>
 
 <script>
-// 初始化渲染
-document.addEventListener('DOMContentLoaded', () => {
+// 初始化渲�?document.addEventListener('DOMContentLoaded', () => { 
     const raw = document.getElementById('markdown-raw').textContent;
     document.getElementById('final-content').innerHTML = marked.parse(raw);
+
+    const rationaleRaw = document.getElementById('rationale-raw')?.textContent;
+    if (rationaleRaw) {
+        document.getElementById('rationale-content').innerHTML = marked.parse(rationaleRaw);
+    }
+
+    const comparisonRaw = document.getElementById('comparison-raw')?.textContent;
+    if (comparisonRaw) {
+        document.getElementById('comparison-content').innerHTML = marked.parse(comparisonRaw);
+    }
 });
 
 function copyContent() {
@@ -324,7 +369,7 @@ function copyContent() {
     navigator.clipboard.writeText(content).then(() => {
         const btn = document.querySelector('.copy-btn');
         const originalText = btn.innerText;
-        btn.innerText = '已复制!';
+        btn.innerText = '已复�?';
         btn.style.borderColor = '#22c55e';
         btn.style.color = '#16a34a';
         setTimeout(() => {
@@ -337,7 +382,6 @@ function copyContent() {
 </script>
 </body>
 </html>`
-
 type HTMLData struct {
 	Time          string
 	Prompt        string
@@ -348,6 +392,8 @@ type HTMLData struct {
 	Summary       string
 	SuccessModels []string
 	FinalContent  string
+	Rationale     string
+	Comparison    string
 }
 
 const subReportTemplate = `<!doctype html>
@@ -370,9 +416,9 @@ h1 { font-size: 20px; color: #0f172a; margin-top: 0; border-bottom: 2px solid #e
 <div class="card">
     <h1>{{.Title}}</h1>
     <div class="meta">
-        <div><strong>模型：</strong>{{.Model}}</div>
-        <div><strong>耗时：</strong>{{.Duration}}</div>
-        {{if .Error}}<div style="color: #ef4444;"><strong>错误：</strong>{{.Error}}</div>{{end}}
+        <div><strong>模型�?/strong>{{.Model}}</div>
+        <div><strong>耗时�?/strong>{{.Duration}}</div>
+        {{if .Error}}<div style="color: #ef4444;"><strong>错误�?/strong>{{.Error}}</div>{{end}}
     </div>
     <div id="content" class="markdown-body"></div>
 </div>
@@ -430,10 +476,9 @@ func findExistingModelResultToday(t time.Time, modelName string) (*ModelResult, 
 		Content:  strings.TrimSpace(content[startIdx : startIdx+endIdx]),
 	}
 
-	// 提取耗时（从元数据中提取）
-	metaStart := strings.Index(content, "<strong>耗时：</strong>")
+	// 提取耗时（从元数据中提取�?	metaStart := strings.Index(content, "<strong>耗时�?/strong>")
 	if metaStart != -1 {
-		metaStart += len("<strong>耗时：</strong>")
+		metaStart += len("<strong>耗时�?/strong>")
 		metaEnd := strings.Index(content[metaStart:], "</div>")
 		if metaEnd != -1 {
 			dStr := strings.TrimSpace(content[metaStart : metaStart+metaEnd])
@@ -500,14 +545,14 @@ func saveJudgeReport(reportDir string, t time.Time, judgeResult JudgeResult) err
 func saveSummaryReport(reportDir string, t time.Time, prompt string, results []ModelResult, judgeResult JudgeResult, totalDuration time.Duration) error {
 	var sb strings.Builder
 	sb.WriteString("# 多模型汇总报告\n\n")
-	sb.WriteString(fmt.Sprintf("- 时间：%s\n- 总耗时：%s\n\n", t.Format("2006-01-02 15:04:05"), totalDuration.Round(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- 时间�?s\n- 总耗时�?s\n\n", t.Format("2006-01-02 15:04:05"), totalDuration.Round(time.Millisecond)))
 
 	for _, r := range results {
-		sb.WriteString(fmt.Sprintf("## 模型：%s\n", r.Model))
+		sb.WriteString(fmt.Sprintf("## 模型�?s\n", r.Model))
 		if r.Err != nil {
-			sb.WriteString(fmt.Sprintf("- 错误：%v\n\n", r.Err))
+			sb.WriteString(fmt.Sprintf("- 错误�?v\n\n", r.Err))
 		} else {
-			sb.WriteString(fmt.Sprintf("- 耗时：%s\n\n%s\n\n", r.CallDuration.Round(time.Millisecond), r.Content))
+			sb.WriteString(fmt.Sprintf("- 耗时�?s\n\n%s\n\n", r.CallDuration.Round(time.Millisecond), r.Content))
 		}
 	}
 
@@ -519,7 +564,7 @@ func saveSummaryReport(reportDir string, t time.Time, prompt string, results []M
 		Error    string
 		Content  string
 	}{
-		Title:    "汇总摘要报告",
+		Title:    "汇总摘要报�?,
 		Model:    "System Orchestrator",
 		Duration: totalDuration.Round(time.Millisecond).String(),
 		Content:  sb.String(),
@@ -547,7 +592,7 @@ func saveFinalConclusionHTML(reportDir string, t time.Time, prompt string, resul
 	score, reason := extractFortuneScore(judgeResult)
 	finalContent := buildFinalContentWithoutScore(judgeResult.Content)
 	if judgeResult.Err != nil {
-		finalContent = fmt.Sprintf("⚠️ **裁判模型整合失败**\n\n- 错误信息: %v\n\n请查看各模型原始输出以获取推演结论。", judgeResult.Err)
+		finalContent = fmt.Sprintf("⚠️ **裁判模型整合失败**\n\n- 错误信息: %v\n\n请查看各模型原始输出以获取推演结论�?, judgeResult.Err)
 	}
 
 	data := HTMLData{
@@ -560,6 +605,15 @@ func saveFinalConclusionHTML(reportDir string, t time.Time, prompt string, resul
 		Summary:       extractFinalConclusionSummary(judgeResult.Content),
 		SuccessModels: successModels,
 		FinalContent:  finalContent,
+		Rationale:     extractSection(judgeResult.Content, "决策依据"),
+		Comparison:    extractSection(judgeResult.Content, "各模型对�?),
+	}
+
+	if data.Comparison == "" {
+		data.Comparison = extractSection(judgeResult.Content, "模型对比")
+	}
+	if data.Rationale == "" {
+		data.Rationale = extractSection(judgeResult.Content, "采用逻辑")
 	}
 
 	path := filepath.Join(reportDir, "final.html")
@@ -581,20 +635,19 @@ func extractFortuneScore(jr JudgeResult) (string, string) {
 		return "暂无评分", "无法提取评分"
 	}
 	lines := strings.Split(jr.Content, "\n")
-	score := "未识别"
+	score := "未识�?
 	reason := ""
 
 	// 评分正则
 	scoreRegexes := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:评分|气场评分|综合评分)[：:]\s*([0-9.]+)(?:\s*/\s*10)?`),
+		regexp.MustCompile(`(?i)(?:评分|气场评分|综合评分)[�?]\s*([0-9.]+)(?:\s*/\s*10)?`),
 		regexp.MustCompile(`([0-9.]+)\s*/\s*10`),
 	}
 
 	// 理由正则
-	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|气场分析|核心点评|综合点评|运势点评|点评)[：:]\s*(.*)`)
+	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|气场分析|核心点评|综合点评|运势点评|点评)[�?]\s*(.*)`)
 
-	// 1. 尝试在文中定位评分和紧随其后的点评
-	for i, line := range lines {
+	// 1. 尝试在文中定位评分和紧随其后的点�?	for i, line := range lines {
 		foundScore := false
 		for _, reg := range scoreRegexes {
 			if reg.MatchString(line) {
@@ -608,8 +661,7 @@ func extractFortuneScore(jr JudgeResult) (string, string) {
 		}
 
 		if foundScore {
-			// 找到评分后，尝试在后面几行寻找点评
-			for j := i; j < len(lines) && j < i+6; j++ {
+			// 找到评分后，尝试在后面几行寻找点�?			for j := i; j < len(lines) && j < i+6; j++ {
 				l := strings.TrimSpace(lines[j])
 				if reasonRegex.MatchString(l) {
 					rm := reasonRegex.FindStringSubmatch(l)
@@ -669,8 +721,7 @@ func extractFinalConclusionSummary(content string) string {
 	if content == "" {
 		return ""
 	}
-	// 尝试寻找第一段非标题内容，避免摘要和正文开头完全重复
-	lines := strings.Split(content, "\n")
+	// 尝试寻找第一段非标题内容，避免摘要和正文开头完全重�?	lines := strings.Split(content, "\n")
 	var firstPara string
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -681,7 +732,7 @@ func extractFinalConclusionSummary(content string) string {
 		break
 	}
 
-	// 简单的正则，去掉 Markdown 符号
+	// 简单的正则，去�?Markdown 符号
 	re := regexp.MustCompile(`[#*` + "`" + `>_-]`)
 	clean := re.ReplaceAllString(firstPara, " ")
 
@@ -697,13 +748,13 @@ func extractFinalConclusionSummary(content string) string {
 
 func buildFinalContentWithoutScore(content string) string {
 	if content == "" {
-		return "（裁判模型未返回有效推演结论，请检查各模型原始输出）"
+		return "（裁判模型未返回有效推演结论，请检查各模型原始输出�?
 	}
 	lines := strings.Split(content, "\n")
 	var result []string
 
-	scoreRegex := regexp.MustCompile(`(?i)(?:评分|气场评分|综合评分)[：:]\s*[0-9.]+|[0-9.]+\s*/\s*10`)
-	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|气场分析|核心点评|综合点评|运势点评|点评)[：:]`)
+	scoreRegex := regexp.MustCompile(`(?i)(?:评分|气场评分|综合评分)[�?]\s*[0-9.]+|[0-9.]+\s*/\s*10`)
+	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|气场分析|核心点评|综合点评|运势点评|点评)[�?]`)
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -711,9 +762,8 @@ func buildFinalContentWithoutScore(content string) string {
 			result = append(result, line)
 			continue
 		}
-		// 过滤评分行及其点评行（这些已在卡片中显示）
-		if scoreRegex.MatchString(line) || reasonRegex.MatchString(trimmed) ||
-			strings.Contains(trimmed, "审计评分") || strings.Contains(trimmed, "最终评分") ||
+		// 过滤评分行及其点评行（这些已在卡片中显示�?		if scoreRegex.MatchString(line) || reasonRegex.MatchString(trimmed) ||
+			strings.Contains(trimmed, "审计评分") || strings.Contains(trimmed, "最终评�?) ||
 			strings.Contains(trimmed, "气场点评") || strings.Contains(trimmed, "气场分析") {
 			continue
 		}
@@ -725,4 +775,25 @@ func buildFinalContentWithoutScore(content string) string {
 		return content // 过滤得太干净了就回退，确保有内容显示
 	}
 	return final
+}
+
+func extractSection(content, sectionName string) string {
+	lines := strings.Split(content, "\n")
+	var result []string
+	found := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## ") && (strings.Contains(trimmed, sectionName) || strings.Contains(sectionName, trimmed)) {
+			found = true
+			continue
+		}
+		if found {
+			if strings.HasPrefix(trimmed, "## ") {
+				break
+			}
+			result = append(result, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(result, "\n"))
 }
