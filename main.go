@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -54,15 +53,6 @@ func main() {
 
 	promptContent := buildPrompt(targetTime)
 
-	// 如果目标日期报告已生成，直接打开并退出
-	baseReportDir := filepath.Join("reports", targetTime.Format("2006-01-02"))
-	existingFinalPath := filepath.Join(baseReportDir, "final.html")
-	if _, err := os.Stat(existingFinalPath); err == nil {
-		fmt.Printf("目标日期报告已存在: %s，直接打开。\n", existingFinalPath)
-		_ = openInDefaultBrowser(existingFinalPath)
-		return
-	}
-
 	reportDir, err := createReportDir(targetTime)
 	if err != nil {
 		fmt.Printf("创建报告目录失败: %v\n", err)
@@ -80,6 +70,7 @@ func main() {
 
 	var results []ModelResult
 	var mu sync.Mutex
+	anyNewModelRun := false
 
 	// 1. 并发执行云端模型
 	if len(cloudModels) > 0 {
@@ -112,6 +103,9 @@ func main() {
 				}
 				mu.Lock()
 				results = append(results, res)
+				if err == nil {
+					anyNewModelRun = true
+				}
 				mu.Unlock()
 				_ = saveSingleModelReport(reportDir, targetTime, res)
 
@@ -160,6 +154,9 @@ func main() {
 
 			mu.Lock()
 			results = append(results, res)
+			if err == nil {
+				anyNewModelRun = true
+			}
 			mu.Unlock()
 
 			_ = saveSingleModelReport(reportDir, targetTime, res)
@@ -197,6 +194,9 @@ func main() {
 			CallDuration:  time.Since(cliStart),
 			TotalDuration: time.Since(cliStart),
 		}
+		if cliErr == nil {
+			anyNewModelRun = true
+		}
 	}
 
 	mu.Lock()
@@ -219,6 +219,15 @@ func main() {
 	}
 
 	if appConfig.JudgeEnabled && successCount > 0 {
+		// 尝试增量跳过：如果没有新跑的模型，且已有裁判结果，直接复用
+		if !anyNewModelRun {
+			if res, ok := findExistingJudgeResultToday(targetTime); ok {
+				fmt.Println(">>> 发现已有成功裁判报告且无新模型运行，跳过整合。")
+				judgeResult = *res
+				goto assemble
+			}
+		}
+
 		fmt.Println(">>> 正在执行裁判整合...")
 		judgeModel := resolveJudgeModel(localModels, appConfig)
 		start := time.Now()
@@ -241,6 +250,7 @@ func main() {
 		fmt.Println(">>> 跳过裁判整合：没有任何模型成功返回结果。")
 	}
 
+assemble:
 	totalDuration := time.Since(startedAt)
 	_ = saveSummaryReport(reportDir, targetTime, promptContent, results, judgeResult, totalDuration)
 	finalPath, _ := saveFinalConclusionHTML(reportDir, targetTime, promptContent, results, judgeResult, totalDuration)
@@ -251,23 +261,26 @@ func main() {
 		fmt.Printf("最终结论报告: %s\n", finalPath)
 		_ = openInDefaultBrowser(finalPath)
 	}
-
-	_ = finalCleanupLocalModels(appConfig.BaseURL, appConfig.LocalUnloadTimeout, appConfig.RunningPollInterval)
 }
 
 func buildPrompt(t time.Time) string {
 	d := calendar.NewLunarFromDate(t)
-	return fmt.Sprintf("%s，%s年%s月%s日", t.Format("2006年01月02日"), d.GetYearInGanZhi(), d.GetMonthInGanZhi(), d.GetDayInGanZhi())
+	gz := d.GetEightChar()
+	return fmt.Sprintf("今日公历：%s，农历：%s %s年 %s月 %s日，八字：%s %s %s %s",
+		t.Format("2006-01-02"),
+		d.GetYearInChinese(), d.GetMonthInChinese(), d.GetDayInChinese(),
+		gz.GetYear(), gz.GetMonth(), gz.GetDay(), gz.GetTime(),
+	)
 }
 
 func enabledCloudModels(models []CloudModelConfig) []CloudModelConfig {
-	var res []CloudModelConfig
+	var enabled []CloudModelConfig
 	for _, m := range models {
 		if m.Enabled {
-			res = append(res, m)
+			enabled = append(enabled, m)
 		}
 	}
-	return res
+	return enabled
 }
 
 func resolveJudgeModel(localModels []string, cfg Config) string {
@@ -279,13 +292,13 @@ func resolveJudgeModel(localModels []string, cfg Config) string {
 
 func judgeModelResults(cfg Config, localModels []string, judgeModel, originalPrompt string, results []ModelResult) (string, error) {
 	var sb strings.Builder
-	sb.WriteString("以下是同一个问题的多模型输出结果，请你整合出一份最终结论。\n\n")
+	sb.WriteString("以下是多个 AI 模型对今日能量管理的推演结论，请你作为首席架构师进行整合：\n\n")
+
 	for _, r := range results {
-		if r.Err == nil && r.Content != "" {
-			sb.WriteString(fmt.Sprintf("--- 模型 %s ---\n%s\n\n", r.Model, r.Content))
+		if r.Err == nil {
+			sb.WriteString(fmt.Sprintf("### 模型 %s 的结论：\n%s\n\n", r.Model, r.Content))
 		}
 	}
-	sb.WriteString("请根据以上内容生成最终结论。")
 
 	input := sb.String()
 
@@ -310,20 +323,11 @@ func judgeModelResults(cfg Config, localModels []string, judgeModel, originalPro
 	// 3. 兜底尝试第一个开启的云端模型
 	for _, cloud := range cfg.CloudModels {
 		if cloud.Enabled {
-			fmt.Printf("[裁判] 尝试使用第一个可用的云端模型: %s...\n", cloud.Name)
+			fmt.Printf("[裁判] 尝试使用第一个可用云端模型: %s...\n", cloud.Name)
 			return chatWithCloudModel(cloud, cfg.JudgePrompt, input, cfg.CloudCallTimeout)
 		}
 	}
 
 	// 4. 降级使用本地 Ollama
 	return chatWithOllama(cfg.BaseURL, judgeModel, cfg.JudgePrompt, input, cfg.LocalCallTimeout)
-}
-
-func findCloudModelConfig(name string, clouds []CloudModelConfig) (CloudModelConfig, bool) {
-	for _, c := range clouds {
-		if c.Name == name {
-			return c, true
-		}
-	}
-	return CloudModelConfig{}, false
 }
