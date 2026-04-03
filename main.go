@@ -60,13 +60,26 @@ func main() {
 	}
 	_ = saveRunMeta(reportDir, targetTime, promptContent)
 
-	localModels, err := resolveModels(appConfig.BaseURL, appConfig)
-	if err != nil {
-		fmt.Printf("警告：获取本地模型列表失败（请检查 Ollama 是否启动）: %v\n", err)
+	var localModels []string
+	if appConfig.OllamaEnabled {
+		localModels, err = resolveModels(appConfig.BaseURL, appConfig)
+		if err != nil {
+			fmt.Printf("警告：获取 Ollama 模型列表失败: %v\n", err)
+		}
 	}
+
+	var lmStudioModels []string
+	if appConfig.LMStudioEnabled {
+		rawLMModels, _ := resolveLMStudioModels(appConfig.LMStudioURL)
+		lmStudioModels = applyModelSelectionRules(rawLMModels, appConfig)
+		if len(lmStudioModels) > 0 {
+			fmt.Printf("发现 LM Studio 模型: %v\n", lmStudioModels)
+		}
+	}
+
 	cloudModels := enabledCloudModels(appConfig.CloudModels)
 
-	fmt.Printf("本次任务：云端模型 %d 个，本地模型 %d 个\n", len(cloudModels), len(localModels))
+	fmt.Printf("本次任务：云端 %d 个，Ollama %d 个，LM Studio %d 个\n", len(cloudModels), len(localModels), len(lmStudioModels))
 
 	var results []ModelResult
 	var mu sync.Mutex
@@ -81,7 +94,6 @@ func main() {
 			go func(c CloudModelConfig) {
 				defer wg.Done()
 
-				// 检测是否已有成功报告
 				if res, ok := findExistingModelResultToday(targetTime, c.Name); ok {
 					fmt.Printf("[云端] %s 发现已有成功报告，跳过调用。\n", c.Name)
 					mu.Lock()
@@ -120,13 +132,12 @@ func main() {
 		fmt.Println("<<< 云端模型阶段结束。")
 	}
 
-	// 2. 串行执行本地模型
+	// 2. 串行执行本地 Ollama 模型
 	if len(localModels) > 0 {
-		fmt.Println(">>> 正在串行调用本地模型...")
+		fmt.Println(">>> 正在串行调用 Ollama 模型...")
 		for i, mName := range localModels {
-			fmt.Printf("[%d/%d] 本地模型: %s\n", i+1, len(localModels), mName)
+			fmt.Printf("[%d/%d] Ollama 模型: %s\n", i+1, len(localModels), mName)
 
-			// 检测是否已有成功报告
 			if res, ok := findExistingModelResultToday(targetTime, mName); ok {
 				fmt.Printf("[%d/%d] 模型 %s 发现已有成功报告，跳过调用。\n", i+1, len(localModels), mName)
 				mu.Lock()
@@ -173,7 +184,66 @@ func main() {
 				time.Sleep(appConfig.LocalSwitchDelay)
 			}
 		}
-		fmt.Println("<<< 本地模型阶段结束。")
+		fmt.Println("<<< Ollama 模型阶段结束。")
+	}
+
+	// 2.1 串行执行本地 LM Studio 模型
+	if len(lmStudioModels) > 0 {
+		fmt.Println(">>> 正在串行调用 LM Studio 模型...")
+		for i, mName := range lmStudioModels {
+			fmt.Printf("[%d/%d] LM Studio 模型: %s\n", i+1, len(lmStudioModels), mName)
+
+			if res, ok := findExistingModelResultToday(targetTime, mName); ok {
+				fmt.Printf("[%d/%d] 模型 %s 已有成功报告，跳过。\n", i+1, len(lmStudioModels), mName)
+				mu.Lock()
+				results = append(results, *res)
+				mu.Unlock()
+				_ = saveSingleModelReport(reportDir, targetTime, *res)
+				continue
+			}
+
+			// 显式加载模型
+			fmt.Printf("   正在加载模型 %s...\n", mName)
+			if loadErr := loadLMStudioModel(appConfig.LMStudioURL, mName); loadErr != nil {
+				fmt.Printf("   加载失败: %v\n", loadErr)
+				// 尝试直接调用，也许已经加载了
+			}
+
+			start := time.Now()
+			content, err := chatWithLMStudio(appConfig.LMStudioURL, mName, appConfig.SystemPrompt, promptContent, appConfig.LocalCallTimeout)
+			res := ModelResult{
+				Model:         mName,
+				Content:       content,
+				Err:           err,
+				Provider:      "lmstudio",
+				CallDuration:  time.Since(start),
+				TotalDuration: time.Since(start),
+			}
+
+			mu.Lock()
+			results = append(results, res)
+			if err == nil {
+				anyNewModelRun = true
+			}
+			mu.Unlock()
+
+			_ = saveSingleModelReport(reportDir, targetTime, res)
+
+			if err != nil {
+				fmt.Printf("[%d/%d] LM Studio 模型 %s 失败: %v\n", i+1, len(lmStudioModels), mName, err)
+			} else {
+				fmt.Printf("[%d/%d] LM Studio 模型 %s 成功，耗时: %s\n", i+1, len(lmStudioModels), mName, res.CallDuration.Round(time.Millisecond))
+			}
+
+			// 显式卸载模型以释放显存
+			fmt.Printf("   正在卸载模型 %s...\n", mName)
+			_ = unloadLMStudioModel(appConfig.LMStudioURL, mName)
+
+			if i < len(lmStudioModels)-1 {
+				time.Sleep(appConfig.LocalSwitchDelay)
+			}
+		}
+		fmt.Println("<<< LM Studio 模型阶段结束。")
 	}
 
 	// 3. 调用本地 Gemini CLI 参与推演
@@ -219,7 +289,6 @@ func main() {
 	}
 
 	if appConfig.JudgeEnabled && successCount > 0 {
-		// 尝试增量跳过：如果没有新跑的模型，且已有裁判结果，直接复用
 		if !anyNewModelRun {
 			if res, ok := findExistingJudgeResultToday(targetTime); ok {
 				fmt.Println(">>> 发现已有成功裁判报告且无新模型运行，跳过整合。")
@@ -266,7 +335,7 @@ assemble:
 func buildPrompt(t time.Time) string {
 	d := calendar.NewLunarFromDate(t)
 	gz := d.GetEightChar()
-	return fmt.Sprintf("今日公历：%s，农历：%s %s年 %s月 %s日，八字：%s %s %s %s",
+	return fmt.Sprintf("今日公历：%s，农历：%s年%s月%s日，八字：%s %s %s %s",
 		t.Format("2006-01-02"),
 		d.GetYearInChinese(), d.GetMonthInChinese(), d.GetDayInChinese(),
 		gz.GetYear(), gz.GetMonth(), gz.GetDay(), gz.GetTime(),
@@ -302,7 +371,6 @@ func judgeModelResults(cfg Config, localModels []string, judgeModel, originalPro
 
 	input := sb.String()
 
-	// 1. 尝试使用首选 Provider (本地 CLI)
 	if strings.EqualFold(cfg.JudgeProvider, "local-cli") {
 		fmt.Printf("[裁判] 尝试使用本地 CLI (%s)...\n", judgeModel)
 		content, err := chatWithLocalCLI(cfg.JudgePrompt, input, cfg.CloudCallTimeout)
@@ -312,7 +380,6 @@ func judgeModelResults(cfg Config, localModels []string, judgeModel, originalPro
 		fmt.Printf("[裁判] 本地 CLI 失败: %v。将尝试 Fallback 到云端模型...\n", err)
 	}
 
-	// 2. Fallback 或 直接调用云端模型
 	for _, cloud := range cfg.CloudModels {
 		if cloud.Enabled && (cloud.Name == judgeModel || judgeModel == "gemini-flash-latest" || judgeModel == "gemini-cli") {
 			fmt.Printf("[裁判] 正在使用云端模型 Fallback: %s...\n", cloud.Name)
@@ -320,7 +387,6 @@ func judgeModelResults(cfg Config, localModels []string, judgeModel, originalPro
 		}
 	}
 
-	// 3. 兜底尝试第一个开启的云端模型
 	for _, cloud := range cfg.CloudModels {
 		if cloud.Enabled {
 			fmt.Printf("[裁判] 尝试使用第一个可用云端模型: %s...\n", cloud.Name)
@@ -328,6 +394,5 @@ func judgeModelResults(cfg Config, localModels []string, judgeModel, originalPro
 		}
 	}
 
-	// 4. 降级使用本地 Ollama
 	return chatWithOllama(cfg.BaseURL, judgeModel, cfg.JudgePrompt, input, cfg.LocalCallTimeout)
 }

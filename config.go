@@ -18,14 +18,17 @@ type CloudModelConfig struct {
 
 type Config struct {
 	BaseURL          string `json:"base_url"`
+	LMStudioURL      string `json:"lmstudio_url"`
 	SystemPrompt     string `json:"system_prompt"`
 	JudgePrompt      string `json:"judge_prompt"`
 	SystemPromptFile string `json:"system_prompt_file"`
 	JudgePromptFile  string `json:"judge_prompt_file"`
 
-	JudgeEnabled  bool   `json:"judge_enabled"`
-	JudgeModel    string `json:"judge_model"`
-	JudgeProvider string `json:"judge_provider"`
+	OllamaEnabled   bool   `json:"ollama_enabled"`
+	LMStudioEnabled bool   `json:"lmstudio_enabled"`
+	JudgeEnabled    bool   `json:"judge_enabled"`
+	JudgeModel      string `json:"judge_model"`
+	JudgeProvider   string `json:"judge_provider"`
 
 	ModelFilter []string `json:"model_filter"`
 	ModelSkip   []string `json:"model_skip"`
@@ -49,7 +52,8 @@ type Config struct {
 }
 
 var appConfig = Config{
-	BaseURL: "http://localhost:11434",
+	BaseURL:     "http://127.0.0.1:11434",
+	LMStudioURL: "http://127.0.0.1:1234/v1",
 
 	SystemPrompt: "你现在是我的私人能量管理系统。请严格按照我的原局进行推演。",
 	JudgePrompt:  "你是一个严谨的最终结论整合助手。",
@@ -57,11 +61,13 @@ var appConfig = Config{
 	SystemPromptFile: "prompts/system_prompt.txt",
 	JudgePromptFile:  "prompts/judge_prompt.txt",
 
-	JudgeEnabled:  true,
-	JudgeModel:    "gemini-cli",
-	JudgeProvider: "local-cli",
+	OllamaEnabled:   false,
+	LMStudioEnabled: true,
+	JudgeEnabled:    true,
+	JudgeModel:      "gemini-cli",
+	JudgeProvider:   "local-cli",
 
-	ModelFilter: []string{"qwen", "gemma", "glm", "deepseek"},
+	ModelFilter: []string{"qwen", "gemma", "deepseek"},
 	ModelSkip:   []string{"embed", "embedding", "bge", "rerank", "reranker", "vision", "vl", "llava", "coder", "9b"},
 	ModelLimit:  10,
 

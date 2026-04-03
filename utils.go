@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -23,6 +24,42 @@ func uniqueStrings(values []string) []string {
 		result = append(result, v)
 	}
 	return result
+}
+
+func applyModelSelectionRules(models []string, cfg Config) []string {
+	selected := make([]string, 0, len(models))
+	for _, model := range uniqueStrings(models) {
+		if !isLikelyChatModel(model) {
+			continue
+		}
+		if len(cfg.ModelFilter) > 0 && !containsAnyKeyword(model, cfg.ModelFilter) {
+			continue
+		}
+		if len(cfg.ModelSkip) > 0 && containsAnyKeyword(model, cfg.ModelSkip) {
+			continue
+		}
+		selected = append(selected, model)
+	}
+	sort.Strings(selected)
+	if cfg.ModelLimit > 0 && len(selected) > cfg.ModelLimit {
+		selected = selected[:cfg.ModelLimit]
+	}
+	return selected
+}
+
+func isLikelyChatModel(modelName string) bool {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	blockedKeywords := []string{
+		"embed", "embedding", "bge", "rerank", "reranker", "vision", "vl",
+		"llava", "minicpm-v", "moondream", "clip", "whisper", "asr", "tts",
+		"stable-diffusion", "sdxl",
+	}
+	for _, keyword := range blockedKeywords {
+		if strings.Contains(name, keyword) {
+			return false
+		}
+	}
+	return true
 }
 
 func containsAnyKeyword(modelName string, keywords []string) bool {
