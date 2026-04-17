@@ -10,7 +10,7 @@ import (
 )
 
 // chatWithLocalCLI 调用本地命令行工具（如 gemini-cli）
-func chatWithLocalCLI(systemPrompt, userPrompt string, timeout time.Duration) (string, error) {
+func chatWithLocalCLI(modelName, systemPrompt, userPrompt string, timeout time.Duration) (string, error) {
 	// 构造输入：将 System Prompt 和 User Prompt 组合
 	combinedInput := fmt.Sprintf("%s\n\n%s", systemPrompt, userPrompt)
 
@@ -18,8 +18,13 @@ func chatWithLocalCLI(systemPrompt, userPrompt string, timeout time.Duration) (s
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// 默认使用 gemini-cli 的配置
-	cmd := exec.CommandContext(ctx, "gemini", "ask")
+	// 构造命令
+	args := []string{"ask"}
+	if modelName != "" && modelName != "gemini-cli" && modelName != "local-cli" {
+		args = append(args, "--model", modelName)
+	}
+
+	cmd := exec.CommandContext(ctx, "gemini", args...)
 	
 	cmd.Stdin = strings.NewReader(combinedInput)
 	var stdout, stderr bytes.Buffer

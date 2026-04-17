@@ -16,402 +16,294 @@ const htmlTemplate = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>能量管理最终结论</title>
+<title>CORE_LOGIC_AUDIT_REPORT</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
 :root {
     --primary: #0f172a;
     --accent: #6366f1;
-    --accent-light: #e0e7ff;
-    --bg: #f8fafc;
-    --card-bg: #ffffff;
-    --text-main: #1e293b;
-    --text-muted: #64748b;
-    --border: #e2e8f0;
-    --shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --accent-glow: rgba(99, 102, 241, 0.4);
+    --bg: #0b0f1a;
+    --card-bg: rgba(21, 27, 45, 0.8);
+    --text-main: #f1f5f9;
+    --text-muted: #94a3b8;
+    --border: #1e293b;
     --success: #10b981;
     --warning: #f59e0b;
     --danger: #ef4444;
 }
 
 body {
-    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "PingFang SC", "Microsoft YaHei", monospace;
+    font-family: 'Inter', 'JetBrains Mono', 'PingFang SC', sans-serif;
     background: var(--bg);
+    background-image: radial-gradient(circle at 50% 0%, #1e293b 0%, #0b0f1a 100%);
     color: var(--text-main);
     margin: 0;
-    padding: 24px 16px;
-    line-height: 1.6;
-    -webkit-font-smoothing: antialiased;
+    padding: 40px 20px;
+    line-height: 1.8;
 }
 
-.container {
-    max-width: 1000px;
-    margin: 0 auto;
-}
+.container { max-width: 960px; margin: 0 auto; }
 
 .card {
     background: var(--card-bg);
+    backdrop-filter: blur(10px);
     border-radius: 12px;
-    padding: 28px;
-    box-shadow: var(--shadow);
+    padding: 32px;
     margin-bottom: 24px;
     border: 1px solid var(--border);
-    position: relative;
-    overflow: hidden;
-}
-
-.card::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 4px;
-    height: 100%;
-    background: var(--accent);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
 }
 
 .header-card {
-    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-    color: white;
-    border: none;
-}
-.header-card::before { display: none; }
-
-.header {
+    border-bottom: 4px solid var(--accent);
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
+    align-items: flex-start;
 }
 
 h1 {
     margin: 0;
     font-size: 24px;
-    font-weight: 800;
-    letter-spacing: -0.025em;
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    font-weight: 900;
+    letter-spacing: -0.02em;
 }
-h1::before {
-    content: "⚡";
-    font-size: 20px;
-}
+h1 span { color: var(--accent); }
 
-.badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 12px;
-    border-radius: 6px;
-    background: rgba(99, 102, 241, 0.2);
-    color: #a5b4fc;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    border: 1px solid rgba(99, 102, 241, 0.3);
-}
-
-.meta {
+.meta-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 16px;
-    font-size: 13px;
-    color: #94a3b8;
-    border-top: 1px solid rgba(255,255,255,0.1);
-    padding-top: 16px;
+    margin-top: 24px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono';
+    color: var(--text-muted);
 }
 
-.meta-item strong {
-    color: #e2e8f0;
-    font-weight: 600;
-    margin-right: 4px;
+.meta-item strong { color: var(--text-main); margin-right: 8px; }
+
+.score-panel {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 32px;
+    align-items: center;
 }
 
-.score-card {
-    text-align: center;
-    padding: 40px 20px;
+.score-circle {
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    border: 8px solid var(--accent);
     display: flex;
     flex-direction: column;
+    justify-content: center;
     align-items: center;
+    box-shadow: 0 0 30px var(--accent-glow);
 }
 
-.score-good { border-color: var(--success); }
-.score-good::before { background: var(--success); }
-.score-mid { border-color: var(--warning); }
-.score-mid::before { background: var(--warning); }
-.score-low { border-color: var(--danger); }
-.score-low::before { background: var(--danger); }
+.score-value { font-size: 56px; font-weight: 900; color: var(--accent); line-height: 1; }
+.score-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; margin-top: 4px; letter-spacing: 2px; }
 
-.score-label { 
-    font-size: 12px; 
-    font-weight: 800; 
-    text-transform: uppercase; 
-    letter-spacing: 0.2em; 
-    color: var(--text-muted);
-    margin-bottom: 8px;
+.score-summary {
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.4;
+    padding-left: 24px;
+    border-left: 4px solid var(--accent);
 }
-.score-value { 
-    font-size: 84px; 
-    font-weight: 900; 
-    line-height: 1; 
-    margin: 12px 0; 
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.05em;
-    font-family: 'JetBrains Mono', monospace;
-}
-.score-good .score-value { color: var(--success); }
-.score-mid .score-value { color: var(--warning); }
-.score-low .score-value { color: var(--danger); }
 
-.score-reason {
-    font-size: 16px;
-    max-width: 650px;
-    margin: 20px auto 0;
-    font-weight: 600;
-    padding: 16px 24px;
-    background: var(--bg);
+.markdown-body { font-size: 15px; }
+.markdown-body h2 {
+    font-size: 18px;
+    color: var(--accent);
+    margin: 40px 0 20px 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.markdown-body strong { color: #fff; background: rgba(99, 102, 241, 0.2); padding: 0 4px; border-radius: 4px; }
+.markdown-body ul { padding-left: 20px; }
+.markdown-body li { margin-bottom: 12px; }
+
+.footer-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-top: 48px;
+}
+
+.sub-card {
+    background: rgba(255,255,255,0.03);
     border-radius: 8px;
-    color: var(--text-main);
-    border: 1px dashed var(--border);
+    padding: 20px;
+    border: 1px solid var(--border);
 }
 
-.content-header {
+.sub-card h3 {
+    margin: 0 0 16px 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+}
+
+.success-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.tag {
+    font-size: 10px;
+    padding: 4px 10px;
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--success);
+    border: 1px solid var(--success);
+    border-radius: 20px;
+    font-family: 'JetBrains Mono';
+}
+
+.score-good { border-left-color: var(--success); }
+.score-mid { border-left-color: var(--warning); }
+/* Pillar Board Styles */
+.bazi-board {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 32px;
+    padding: 20px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+.pillar {
+    text-align: center;
+    padding: 12px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 6px;
+    border-top: 3px solid var(--accent);
+}
+
+.pillar-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px; }
+.pillar-value { font-size: 20px; font-weight: 900; color: #fff; letter-spacing: 2px; }
+.pillar-nayin { font-size: 10px; color: var(--text-muted); margin-top: 8px; }
+
+.bazi-meta {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-    border-bottom: 2px solid var(--border);
-    padding-bottom: 12px;
-}
-
-h2 { font-size: 18px; margin: 0; color: var(--primary); font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
-
-.copy-btn {
-    padding: 6px 14px;
-    background: white;
-    border: 1px solid var(--border);
-    border-radius: 6px;
     font-size: 12px;
-    font-weight: 700;
+    margin-bottom: 16px;
     color: var(--text-muted);
-    cursor: pointer;
-    transition: all 0.2s;
-    text-transform: uppercase;
 }
-.copy-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
-
-.markdown-body {
-    font-size: 15px;
-    color: var(--text-main);
-    line-height: 1.8;
-}
-
-.markdown-body h1, .markdown-body h2, .markdown-body h3 { 
-    color: var(--primary); 
-    margin-top: 1.8em; 
-    margin-bottom: 0.8em; 
-    font-weight: 800;
-}
-.markdown-body h2 { 
-    font-size: 1.15rem; 
-    border-bottom: 1px solid var(--border); 
-    padding-bottom: 0.4em;
-    display: flex;
-    align-items: center;
-}
-.markdown-body h3 { font-size: 1rem; color: var(--text-muted); }
-
-.markdown-body ul, .markdown-body ol { padding-left: 1.4em; margin-bottom: 1.2em; }
-.markdown-body li { margin-bottom: 0.6em; }
-.markdown-body strong { color: var(--primary); font-weight: 700; background: rgba(99, 102, 241, 0.05); padding: 0 4px; }
-
-.markdown-body blockquote {
-    margin: 1.5em 0;
-    padding: 0.8em 1.5em;
-    color: #475569;
-    border-left: 4px solid var(--accent);
-    background: #f1f5f9;
-    font-style: italic;
-    border-radius: 0 8px 8px 0;
-}
-
-.markdown-body code {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.9em;
-    background: #e2e8f0;
-    padding: 0.2em 0.5em;
-    border-radius: 4px;
-    color: #334155;
-    font-weight: 600;
-}
-
-.summary-card {
-    background: #f0f9ff;
-    border-color: #bae6fd;
-}
-.summary-card::before { background: #0ea5e9; }
-.summary-title { color: #0369a1; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 8px; }
-.summary-text { font-size: 15px; color: #0c4a6e; font-weight: 500; }
-
-.section-title {
-    font-size: 12px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.rationale-card::before { background: var(--success); }
-.rationale-title { color: var(--success); }
-.comparison-card::before { background: var(--warning); }
-.comparison-title { color: var(--warning); }
-
-.model-badge {
-    background: #f1f5f9;
-    padding: 4px 10px;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 600;
-    color: #64748b;
-    border: 1px solid var(--border);
-    font-family: 'JetBrains Mono', monospace;
-}
-
-.footer {
-    text-align: center;
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-top: 60px;
-    padding-bottom: 40px;
-    border-top: 1px solid var(--border);
-    padding-top: 24px;
-}
-
-@media (max-width: 640px) {
-    .card { padding: 20px; }
-    h1 { font-size: 20px; }
-    .score-value { font-size: 64px; }
-}
+.bazi-meta strong { color: var(--accent); margin-right: 4px; }
 </style>
 </head>
 <body>
 <div class="container">
     <div class="card header-card">
-        <div class="header">
-            <h1>SYSTEM ENERGY REPORT</h1>
-            <div class="badge">Kernel v2.5.0-STABLE</div>
+        <div>
+            <h1>SYSTEM<span>_CORE_OUTPUT</span></h1>
+            <div class="meta-grid">
+                <div class="meta-item"><strong>TIMESTAMP</strong> {{.Time}}</div>
+                <div class="meta-item"><strong>LATENCY</strong> {{.Duration}}</div>
+                <div class="meta-item"><strong>AUDITOR</strong> {{.JudgeModel}}</div>
+            </div>
         </div>
-        <div class="meta">
-            <div class="meta-item"><strong>TARGET_DATE:</strong>{{.Prompt}}</div>
-            <div class="meta-item"><strong>TIMESTAMP:</strong>{{.Time}}</div>
-            <div class="meta-item"><strong>DURATION:</strong>{{.Duration}}</div>
+        <div style="text-align: right;">
+            <div style="font-size: 10px; color: var(--text-muted); letter-spacing: 1px;">STATUS</div>
+            <div style="color: var(--success); font-weight: 900; font-size: 14px;">● OPERATIONAL</div>
         </div>
     </div>
 
-    <div class="card score-card {{.ScoreClass}}">
-        <div class="score-label">Global Energy Score</div>
-        <div class="score-value">{{.Score}}</div>
-        {{if .ScoreReason}}
-        <div class="score-reason">{{.ScoreReason}}</div>
-        {{end}}
+    <div class="card {{.ScoreClass}}" style="border-left-width: 8px;">
+        <div class="score-panel">
+            <div class="score-circle">
+                <div class="score-value">{{.Score}}</div>
+                <div class="score-label">Efficiency</div>
+            </div>
+            <div class="score-summary">
+                {{.ScoreReason}}
+            </div>
+        </div>
     </div>
-
-    {{if .Summary}}
-    <div class="card summary-card">
-        <div class="summary-title">Executive Summary</div>
-        <div class="summary-text">{{.Summary}}</div>
-    </div>
-    {{end}}
 
     <div class="card">
-        <div class="content-header">
-            <h2>Final Orchestration Conclusions</h2>
-            <button class="copy-btn" onclick="copyContent()">Copy Raw</button>
+        <div class="bazi-meta">
+            <div><strong>SOLAR</strong> {{.Bazi.SolarDate}}</div>
+            <div><strong>LUNAR</strong> {{.Bazi.LunarDate}}</div>
+            <div><strong>USER_MASTER</strong> {{.Bazi.UserGanzhi}}</div>
+            <div><strong>DAY_MASTER</strong> {{.Bazi.TodayMaster}}</div>
+            <div><strong>TERM</strong> {{.Bazi.SolarTerm}}</div>
         </div>
-        <div id="final-content" class="markdown-body"></div>
+
+        <div class="bazi-board">
+            <div class="pillar">
+                <div class="pillar-label">YEAR (年)</div>
+                <div class="pillar-value">{{index .Bazi.TodayGanzhi 0}}</div>
+                <div class="pillar-nayin">{{index .Bazi.Nayins 0}}</div>
+            </div>
+            <div class="pillar">
+                <div class="pillar-label">MONTH (月)</div>
+                <div class="pillar-value">{{index .Bazi.TodayGanzhi 1}}</div>
+                <div class="pillar-nayin">{{index .Bazi.Nayins 1}}</div>
+            </div>
+            <div class="pillar">
+                <div class="pillar-label">DAY (日)</div>
+                <div class="pillar-value">{{index .Bazi.TodayGanzhi 2}}</div>
+                <div class="pillar-nayin">{{index .Bazi.Nayins 2}}</div>
+            </div>
+            <div class="pillar">
+                <div class="pillar-label">HOUR (时)</div>
+                <div class="pillar-value">{{index .Bazi.TodayGanzhi 3}}</div>
+                <div class="pillar-nayin">{{index .Bazi.Nayins 3}}</div>
+            </div>
+        </div>
+
+        <div style="font-size: 10px; color: var(--text-muted); margin-bottom: 24px; display: flex; gap: 20px;">
+            <div><strong>XUNKONG (旬空)</strong> {{range .Bazi.Xunkongs}}{{.}} {{end}}</div>
+        </div>
+
+        <div id="content" class="markdown-body"></div>
     </div>
 
-    {{if .Rationale}}
-    <div class="card rationale-card">
-        <div class="section-title rationale-title">💡 Orchestration Rationale</div>
-        <div id="rationale-content" class="markdown-body" style="font-size: 14px; opacity: 0.9;"></div>
-    </div>
-    {{end}}
-
-    {{if .Comparison}}
-    <div class="card comparison-card">
-        <div class="section-title comparison-title">📊 Multi-Model Diff Analysis</div>
-        <div id="comparison-content" class="markdown-body" style="font-size: 14px; opacity: 0.9;"></div>
-    </div>
-    {{end}}
-
-    <div class="card">
-        <div class="section-title" style="color: var(--text-muted);">Active Compute Nodes</div>
-        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-            {{range .SuccessModels}}
-            <span class="model-badge">{{.}}</span>
-            {{else}}
-            <span class="model-badge">NO_ACTIVE_NODES</span>
-            {{end}}
+    <div class="footer-grid">
+        <div class="sub-card">
+            <h3>Decision Rationale</h3>
+            <div id="rationale" class="markdown-body" style="font-size: 12px; color: var(--text-muted);"></div>
+        </div>
+        <div class="sub-card">
+            <h3>Compute Nodes</h3>
+            <div class="success-tags">
+                {{range .SuccessModels}}<div class="tag">{{.}}</div>{{end}}
+            </div>
+            <h3 style="margin-top:24px">Node Analysis</h3>
+            <div id="comparison" class="markdown-body" style="font-size: 12px; color: var(--text-muted);"></div>
         </div>
     </div>
 
-    <div class="footer">
-        <div>ORCHESTRATION_HASH: {{.Time}} | LOG_PATH: reports/{{.Time}}</div>
-        <div style="margin-top: 8px; opacity: 0.6; font-size: 10px;">&copy; 2026 Energy Management System. All rights reserved.</div>
-    </div>
+    <details style="margin-top: 48px; border-top: 1px solid var(--border); padding-top: 24px;">
+        <summary style="font-size: 11px; color: var(--text-muted); cursor: pointer; text-transform: uppercase; letter-spacing: 2px;">Technical Audit Trace (Raw)</summary>
+        <div class="sub-card" style="margin-top: 16px; background: rgba(0,0,0,0.2);">
+            <div id="raw-trace-display" class="markdown-body" style="font-size: 11px; font-family: 'JetBrains Mono'; color: #64748b;"></div>
+        </div>
+    </details>
 </div>
 
-<div id="markdown-raw" style="display:none;">{{.FinalContent}}</div>
-<div id="rationale-raw" style="display:none;">{{.Rationale}}</div>
-<div id="comparison-raw" style="display:none;">{{.Comparison}}</div>
+<div id="raw" style="display:none;">{{.FinalContent}}</div>
+<div id="raw-rationale" style="display:none;">{{.Rationale}}</div>
+<div id="raw-comparison" style="display:none;">{{.Comparison}}</div>
+<div id="raw-trace" style="display:none;">{{.RawTrace}}</div>
 
 <script>
-document.addEventListener('DOMContentLoaded', () => { 
-    const mdOptions = { gfm: true, breaks: true };
-
-    const render = (id, rawId) => {
-        const el = document.getElementById(id);
-        const rawEl = document.getElementById(rawId);
-        if (el && rawEl) {
-            el.innerHTML = marked.parse(rawEl.textContent, mdOptions);
-        }
-    };
-
-    render('final-content', 'markdown-raw');
-    render('rationale-content', 'rationale-raw');
-    render('comparison-content', 'comparison-raw');
-});
-
-function copyContent() {
-    const content = document.getElementById('markdown-raw').textContent;
-    navigator.clipboard.writeText(content).then(() => {
-        const btn = document.querySelector('.copy-btn');
-        btn.innerText = 'COPIED!';
-        setTimeout(() => btn.innerText = 'COPY RAW', 2000);
+    document.addEventListener('DOMContentLoaded', () => {
+        const renderer = new marked.Renderer();
+        marked.setOptions({ renderer: renderer, gfm: true, breaks: true });
+        
+        document.getElementById('content').innerHTML = marked.parse(document.getElementById('raw').textContent);
+        document.getElementById('rationale').innerHTML = marked.parse(document.getElementById('raw-rationale').textContent);
+        document.getElementById('comparison').innerHTML = marked.parse(document.getElementById('raw-comparison').textContent);
+        document.getElementById('raw-trace-display').innerHTML = marked.parse(document.getElementById('raw-trace').textContent);
     });
-}
 </script>
 </body>
 </html>`
-
-type HTMLData struct {
-	Time          string
-	Prompt        string
-	Duration      string
-	Score         string
-	ScoreReason   string
-	ScoreClass    string
-	Summary       string
-	SuccessModels []string
-	FinalContent  string
-	Rationale     string
-	Comparison    string
-}
 
 const subReportTemplate = `<!doctype html>
 <html>
@@ -421,12 +313,12 @@ const subReportTemplate = `<!doctype html>
 <title>{{.Title}} - {{.Model}}</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
-body { font-family: 'JetBrains Mono', monospace; background: #f8fafc; color: #334155; padding: 20px; line-height: 1.6; }
-.card { background: white; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 900px; margin: 0 auto; border: 1px solid #e2e8f0; }
-h1 { font-size: 18px; color: #0f172a; margin-top: 0; border-bottom: 2px solid #6366f1; padding-bottom: 10px; text-transform: uppercase; }
-.meta { font-size: 12px; color: #64748b; margin-bottom: 20px; background: #f1f5f9; padding: 12px; border-radius: 4px; border-left: 4px solid #6366f1; }
+body { font-family: 'JetBrains Mono', monospace; background: #0b0f1a; color: #e2e8f0; padding: 20px; line-height: 1.6; }
+.card { background: #151b2d; border-radius: 8px; padding: 24px; box-shadow: 0 0 20px rgba(0,0,0,0.5); max-width: 900px; margin: 0 auto; border: 1px solid #1e293b; }
+h1 { font-size: 18px; color: #fff; margin-top: 0; border-bottom: 2px solid #6366f1; padding-bottom: 10px; text-transform: uppercase; }
+.meta { font-size: 12px; color: #94a3b8; margin-bottom: 20px; background: #1e293b; padding: 12px; border-radius: 4px; border-left: 4px solid #6366f1; }
 .markdown-body { font-size: 14px; }
-.markdown-body h2 { font-size: 16px; color: #1e293b; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; margin-top: 1.5em; }
+.markdown-body h2 { font-size: 16px; color: #6366f1; border-bottom: 1px solid #1e293b; padding-bottom: 5px; margin-top: 1.5em; }
 </style>
 </head>
 <body>
@@ -447,6 +339,34 @@ h1 { font-size: 18px; color: #0f172a; margin-top: 0; border-bottom: 2px solid #6
 </script>
 </body>
 </html>`
+
+type BaziInfo struct {
+	SolarDate string
+	LunarDate string
+	UserGanzhi string
+	TodayGanzhi []string // [年, 月, 日, 时]
+	TodayMaster string
+	SolarTerm   string
+	Nayins      []string
+	Xunkongs    []string
+}
+
+type HTMLData struct {
+	Time          string
+	Prompt        string
+	Duration      string
+	JudgeModel    string
+	Score         string
+	ScoreReason   string
+	ScoreClass    string
+	Summary       string
+	SuccessModels []string
+	FinalContent  string
+	Rationale     string
+	Comparison    string
+	RawTrace      string
+	Bazi          BaziInfo
+}
 
 func createReportDir(t time.Time) (string, error) {
 	reportDir := filepath.Join("reports", t.Format("2006-01-02"))
@@ -598,63 +518,7 @@ func saveSingleModelReport(reportDir string, t time.Time, result ModelResult) er
 	return tmpl.Execute(f, data)
 }
 
-func saveJudgeReport(reportDir string, t time.Time, judgeResult JudgeResult) error {
-	tmpl, _ := template.New("sub").Parse(subReportTemplate)
-	data := struct {
-		Title    string
-		Model    string
-		Duration string
-		Error    string
-		Content  string
-	}{
-		Title:    "Orchestrator Audit Report",
-		Model:    judgeResult.Model,
-		Duration: judgeResult.CallDuration.Round(time.Millisecond).String(),
-		Content:  judgeResult.Content,
-	}
-	if judgeResult.Err != nil {
-		data.Error = judgeResult.Err.Error()
-	}
-
-	f, _ := os.Create(filepath.Join(reportDir, "judge.html"))
-	defer f.Close()
-	return tmpl.Execute(f, data)
-}
-
-func saveSummaryReport(reportDir string, t time.Time, prompt string, results []ModelResult, judgeResult JudgeResult, totalDuration time.Duration) error {
-	var sb strings.Builder
-	sb.WriteString("# 任务执行摘要\n\n")
-	sb.WriteString(fmt.Sprintf("- 时间：%s\n- 总耗时：%s\n\n", t.Format("2006-01-02 15:04:05"), totalDuration.Round(time.Millisecond)))
-
-	for _, r := range results {
-		sb.WriteString(fmt.Sprintf("## 节点：%s\n", r.Model))
-		if r.Err != nil {
-			sb.WriteString(fmt.Sprintf("- 状态：ERROR\n- 错误：%v\n\n", r.Err))
-		} else {
-			sb.WriteString(fmt.Sprintf("- 状态：SUCCESS\n- 耗时：%s\n\n%s\n\n", r.CallDuration.Round(time.Millisecond), r.Content))
-		}
-	}
-
-	tmpl, _ := template.New("sub").Parse(subReportTemplate)
-	data := struct {
-		Title    string
-		Model    string
-		Duration string
-		Error    string
-		Content  string
-	}{
-		Title:    "Cluster Summary Report",
-		Model:    "System-Orchestrator",
-		Duration: totalDuration.Round(time.Millisecond).String(),
-		Content:  sb.String(),
-	}
-
-	f, _ := os.Create(filepath.Join(reportDir, "summary.html"))
-	defer f.Close()
-	return tmpl.Execute(f, data)
-}
-
-func saveFinalConclusionHTML(reportDir string, t time.Time, prompt string, results []ModelResult, judgeResult JudgeResult, totalDuration time.Duration) (string, error) {
+func saveFinalConclusionHTML(reportDir string, t time.Time, prompt string, results []ModelResult, judgeResult JudgeResult, totalDuration time.Duration, bazi BaziInfo) (string, error) {
 	tmpl, err := template.New("report").Parse(htmlTemplate)
 	if err != nil {
 		return "", err
@@ -678,6 +542,7 @@ func saveFinalConclusionHTML(reportDir string, t time.Time, prompt string, resul
 		Time:          t.Format("2006-01-02 15:04:05"),
 		Prompt:        prompt,
 		Duration:      totalDuration.Round(time.Millisecond).String(),
+		JudgeModel:    judgeResult.Model,
 		Score:         score,
 		ScoreReason:   reason,
 		ScoreClass:    fortuneScoreClass(score),
@@ -686,6 +551,8 @@ func saveFinalConclusionHTML(reportDir string, t time.Time, prompt string, resul
 		FinalContent:  finalContent,
 		Rationale:     extractSection(judgeResult.Content, "决策依据", "Rationale", "采用逻辑"),
 		Comparison:    extractSection(judgeResult.Content, "模型对比", "Comparison", "优胜模型"),
+		RawTrace:      judgeResult.Content,
+		Bazi:          bazi,
 	}
 
 	path := filepath.Join(reportDir, "final.html")
@@ -710,11 +577,11 @@ func extractFortuneScore(jr JudgeResult) (string, string) {
 	reason := ""
 
 	scoreRegexes := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:评分|气场评分|综合评分|SCORE)[：:]\s*([0-9.]+)(?:\s*/\s*10)?`),
+		regexp.MustCompile(`(?i)(?:评分|能效评分|气场评分|综合评分|SCORE)[：:]\s*([0-9.]+)(?:\s*/\s*10)?`),
 		regexp.MustCompile(`([0-9.]+)\s*/\s*10`),
 	}
 
-	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|气场分析|核心点评|综合点评|运势点评|点评|STATUS)[：:]\s*(.*)`)
+	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|气场分析|核心点评|综合点评|STATUS|气场判断)[：:]\s*(.*)`)
 
 	for i, line := range lines {
 		foundScore := false
@@ -722,7 +589,7 @@ func extractFortuneScore(jr JudgeResult) (string, string) {
 			if reg.MatchString(line) {
 				matches := reg.FindStringSubmatch(line)
 				if len(matches) > 1 {
-					score = matches[1] + " / 10"
+					score = matches[1]
 					foundScore = true
 					break
 				}
@@ -730,6 +597,7 @@ func extractFortuneScore(jr JudgeResult) (string, string) {
 		}
 
 		if foundScore {
+			// Search downwards for reason
 			for j := i; j < len(lines) && j < i+6; j++ {
 				l := strings.TrimSpace(lines[j])
 				if reasonRegex.MatchString(l) {
@@ -766,9 +634,6 @@ func fortuneScoreClass(score string) string {
 	valStr = strings.TrimSpace(valStr)
 	val, err := strconv.ParseFloat(valStr, 64)
 	if err != nil {
-		if strings.Contains(score, "8") || strings.Contains(score, "9") || strings.Contains(score, "10") {
-			return "score-good"
-		}
 		return "score-mid"
 	}
 
@@ -814,8 +679,10 @@ func buildFinalContentWithoutScore(content string) string {
 	lines := strings.Split(content, "\n")
 	var result []string
 
-	scoreRegex := regexp.MustCompile(`(?i)(?:评分|气场评分|综合评分|SCORE)[：:]\s*[0-9.]+|[0-9.]+\s*/\s*10`)
-	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|气场分析|核心点评|综合点评|运势点评|点评|STATUS)[：:]`)
+	scoreRegex := regexp.MustCompile(`(?i)(?:评分|能效评分|气场评分|综合评分|SCORE)[：:]\s*[0-9.]+|[0-9.]+\s*/\s*10`)
+	reasonRegex := regexp.MustCompile(`(?i)(?:气场点评|气场分析|核心点评|综合点评|STATUS|气场判断)[：:]`)
+	// 匹配标题的正则：支持 #, ##, ### 或 **标题**
+	headerRegex := regexp.MustCompile(`^(?:#{1,3}\s+|\*\*)(.*?)(?:\*\*|$)`)
 
 	skipSection := false
 	headerCounter := 1
@@ -830,22 +697,27 @@ func buildFinalContentWithoutScore(content string) string {
 			continue
 		}
 
-		if strings.HasPrefix(trimmed, "## ") {
-			title := strings.ToLower(trimmed)
+		if headerRegex.MatchString(trimmed) {
+			matches := headerRegex.FindStringSubmatch(trimmed)
+			title := strings.ToLower(matches[1])
+
 			if strings.Contains(title, "决策依据") || strings.Contains(title, "rationale") ||
 				strings.Contains(title, "模型对比") || strings.Contains(title, "comparison") ||
-				strings.Contains(title, "采用逻辑") || strings.Contains(title, "优胜模型") {
+				strings.Contains(title, "采用逻辑") || strings.Contains(title, "优胜模型") ||
+				strings.Contains(title, "评分") || strings.Contains(title, "气场") ||
+				strings.Contains(title, "核心结论") || strings.Contains(title, "结论") {
 				skipSection = true
 				continue
 			}
 			skipSection = false
 
-			if matches := reHeader.FindStringSubmatch(trimmed); len(matches) > 1 {
-				titleText := strings.TrimSpace(matches[1])
-				// 去除原有的编号（如 1. 2.）
-				titleText = regexp.MustCompile(`^\d+[.、\s]+`).ReplaceAllString(titleText, "")
-				line = fmt.Sprintf("## %d. %s", headerCounter, titleText)
-				headerCounter++
+			if strings.HasPrefix(trimmed, "## ") {
+				if matches := reHeader.FindStringSubmatch(trimmed); len(matches) > 1 {
+					titleText := strings.TrimSpace(matches[1])
+					titleText = regexp.MustCompile(`^\d+[.、\s]+`).ReplaceAllString(titleText, "")
+					line = fmt.Sprintf("## %d. %s", headerCounter, titleText)
+					headerCounter++
+				}
 			}
 		}
 
@@ -868,20 +740,40 @@ func extractSection(content string, keywords ...string) string {
 	var result []string
 	found := false
 
+	// 匹配标题的正则：支持 #, ##, ### 或 **标题**
+	headerRegex := regexp.MustCompile(`^(?:#{1,3}\s+|\*\*)(.*?)(?:\*\*|$)`)
+
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "## ") {
+		if trimmed == "" {
 			if found {
-				break
-			}
-			for _, kw := range keywords {
-				if strings.Contains(strings.ToLower(trimmed), strings.ToLower(kw)) {
-					found = true
-					break
-				}
+				result = append(result, line)
 			}
 			continue
 		}
+
+		// 检查是否是标题行
+		if headerRegex.MatchString(trimmed) {
+			matches := headerRegex.FindStringSubmatch(trimmed)
+			title := strings.ToLower(matches[1])
+
+			isTargetHeader := false
+			for _, kw := range keywords {
+				if strings.Contains(title, strings.ToLower(kw)) {
+					isTargetHeader = true
+					break
+				}
+			}
+
+			if isTargetHeader {
+				found = true
+				continue
+			} else if found {
+				// 如果已经找到了目标章节，现在遇到了另一个标题，说明当前章节结束
+				break
+			}
+		}
+
 		if found {
 			result = append(result, line)
 		}

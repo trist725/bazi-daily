@@ -23,9 +23,11 @@ type Config struct {
 	JudgePrompt      string `json:"judge_prompt"`
 	SystemPromptFile string `json:"system_prompt_file"`
 	JudgePromptFile  string `json:"judge_prompt_file"`
+	DayMaster        string `json:"day_master"`
 
 	OllamaEnabled   bool   `json:"ollama_enabled"`
 	LMStudioEnabled bool   `json:"lmstudio_enabled"`
+	LocalCLIEnabled bool   `json:"local_cli_enabled"`
 	JudgeEnabled    bool   `json:"judge_enabled"`
 	JudgeModel      string `json:"judge_model"`
 	JudgeProvider   string `json:"judge_provider"`
@@ -55,16 +57,18 @@ var appConfig = Config{
 	BaseURL:     "http://127.0.0.1:11434",
 	LMStudioURL: "http://127.0.0.1:1234/v1",
 
-	SystemPrompt: "你现在是我的私人能量管理系统。请严格按照我的原局进行推演。",
-	JudgePrompt:  "你是一个严谨的最终结论整合助手。",
+	SystemPrompt: "你现在是内核级能效调度专家。请执行深度增量分析，禁止输出模板化的通用建议。",
+	JudgePrompt:  "你现在是系统能效总调度中心。请对多节点的推演进行深度审计，提取当日唯一的硬核结论。你的输出必须包含以下固定章节：\n1. 【核心结论】：直接给出今日最重要的推演结果。\n2. ## 决策依据：详细说明你选择这些结论的逻辑和审计过程。\n3. ## 模型对比：简要评价各推演节点的优劣。\n请确保使用 ## 作为章节标题，以便系统提取。",
 
 	SystemPromptFile: "prompts/system_prompt.txt",
 	JudgePromptFile:  "prompts/judge_prompt.txt",
+	DayMaster:        "辛",
 
 	OllamaEnabled:   false,
 	LMStudioEnabled: true,
+	LocalCLIEnabled: true,
 	JudgeEnabled:    true,
-	JudgeModel:      "gemini-cli",
+	JudgeModel:      "gemini-3.1-pro-preview",
 	JudgeProvider:   "local-cli",
 
 	ModelFilter: []string{"qwen", "gemma", "deepseek"},
@@ -87,8 +91,8 @@ var appConfig = Config{
 
 	CloudModels: []CloudModelConfig{
 		{
-			Enabled:    true,
-			Name:       "gemini-flash-latest",
+			Enabled:    false,
+			Name:       "gemini-3.1-pro-preview",
 			Provider:   "gemini",
 			APIKey:     "",
 			APIKeyFile: "secrets/gemini_api_key.txt",
